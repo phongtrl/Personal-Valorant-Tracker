@@ -576,6 +576,36 @@ function renderBreakdown(id, key) {
   });
 }
 
+function renderMapKd(list) {
+  const box = $("by-map-kd");
+  box.replaceChildren();
+  const groups = {};
+  list.forEach((m) => (groups[m.map] = groups[m.map] || []).push(m));
+  const rows = Object.entries(groups)
+    .map(([name, g]) => {
+      const kills = sum(g, "kills");
+      const deaths = sum(g, "deaths");
+      return { name, n: g.length, kills, deaths, kd: deaths ? kills / deaths : kills };
+    })
+    .sort((a, b) => b.kd - a.kd);
+  if (!rows.length) {
+    box.append(el("p", "empty", "No matches to show."));
+    return;
+  }
+  rows.forEach((r) => {
+    const row = el("div", "brow");
+    const name = el("span", "", r.name);
+    name.append(el("small", "", `${r.kills} kills, ${r.deaths} deaths · ${r.n} ${r.n === 1 ? "game" : "games"}`));
+    const bar = el("div", "bar kd");
+    const fill = el("div", "fill");
+    fill.style.width = Math.min(r.kd / 2.5, 1) * 100 + "%";
+    fill.style.background = r.kd >= 1 ? "var(--win)" : "var(--loss)";
+    bar.append(fill);
+    row.append(name, bar, el("span", "bpct", r.kd.toFixed(2)));
+    box.append(row);
+  });
+}
+
 function renderLog() {
   const body = $("log");
   body.replaceChildren();
@@ -595,6 +625,7 @@ function renderLog() {
   filter.value = options.some((option) => option.value === selectedMode) ? selectedMode : "all";
 
   const visibleMatches = byDate().filter((m) => filter.value === "all" || String(m.mode || "Unknown") === filter.value);
+  renderMapKd(visibleMatches);
   $("log-empty").hidden = visibleMatches.length > 0;
   $("log-empty").textContent = matches.length ? "No matches for this game mode." : "No matches yet. Fetch your latest to load match history.";
   $("log-count").textContent = matches.length
