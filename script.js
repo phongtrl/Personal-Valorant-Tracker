@@ -13,8 +13,8 @@ const DEFAULTS = {
 };
 
 const API = "https://api.henrikdev.xyz";
-// Never embed an API key in a public/static site. Enter your own key in Settings.
-const DEFAULT_API_KEY = "";
+// Convenience default for this personal static build. Anyone who can access the source can read this key.
+const DEFAULT_API_KEY = "HDEV-8bdeba6c-994a-4cf7-b95d-6f034389fa03";
 const KEY_ACCOUNT = "vt:account";
 const KEY_API = "vt:apikey";
 const KEY_MATCHES = "vt:matches:";
@@ -126,7 +126,7 @@ function setStatus(message, isError = false) {
 /* ---------- Lookup (HenrikDev API) ---------- */
 
 async function api(path) {
-  let key = (store.get(KEY_API) || "").trim();
+  let key = (store.get(KEY_API) || DEFAULT_API_KEY || "").trim();
   if (!key) {
     key = (window.prompt("Enter your HenrikDev API key. It will be stored only in this browser. For a public site, use a server-side proxy instead.") || "").trim();
     if (!key) throw new Error("No API key entered. Fetch cancelled.");
