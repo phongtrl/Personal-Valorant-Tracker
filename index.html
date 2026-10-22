@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valorant tracker — NAIFU</title>
+<style>
+  :root {
+    --paper: #EDE9E1; --panel: #F5F2EC; --ink: #2A2825; --muted: #7C766C;
+    --line: #D8D2C7; --win: #6F7F68; --loss: #9B5B49; --wood: #A8875E;
+    --serif: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", "Iowan Old Style", Georgia, serif;
+    --sans: "Hiragino Sans", "Yu Gothic UI", "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+  }
+  [hidden] { display: none !important; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-weight: 300; line-height: 1.6; }
+  main { max-width: 860px; margin: 0 auto; padding: 56px 24px 96px; }
+  h1, h2, .serif { font-family: var(--serif); font-weight: 400; }
+  h1 { margin: 0; font-size: 2.2rem; letter-spacing: 0.01em; line-height: 1.2; }
+  h2 { margin: 0 0 18px; font-size: 1.2rem; }
+  h1 small { font-family: var(--sans); font-size: 1rem; color: var(--muted); margin-left: 4px; }
+  section, details { margin-top: 64px; }
+  p { margin: 0; }
+  .muted { color: var(--muted); }
+
+  button, .btn { font: inherit; font-size: 0.92rem; padding: 9px 22px; border: 1px solid var(--ink); background: var(--ink); color: var(--panel); border-radius: 2px; cursor: pointer; transition: background .2s, color .2s; }
+  button.quiet, .btn { background: transparent; color: var(--ink); }
+  button:hover { background: var(--wood); border-color: var(--wood); color: var(--panel); }
+  .btn:hover { background: var(--ink); color: var(--panel); }
+  button:disabled { opacity: .5; cursor: progress; }
+  :focus-visible { outline: 2px solid var(--wood); outline-offset: 3px; }
+  input, select { font: inherit; font-weight: 300; color: var(--ink); width: 100%; padding: 9px 2px; border: 0; border-bottom: 1px solid var(--muted); background: transparent; border-radius: 0; }
+  input:focus, select:focus { outline: none; border-bottom-color: var(--ink); box-shadow: 0 1px 0 var(--ink); }
+  label { display: grid; gap: 2px; font-size: 0.85rem; color: var(--muted); }
+  .sr { position: absolute; left: -9999px; }
+  .error { color: var(--loss); min-height: 1.6em; }
+
+  /* welcome */
+  .welcome { min-height: 70vh; display: grid; place-content: center; justify-items: center; text-align: center; gap: 14px; margin: 0; }
+  .welcome .enso { width: 150px; height: 150px; margin-bottom: 10px; }
+  .welcome form { display: flex; gap: 12px; align-items: end; margin-top: 20px; width: min(500px, 100%); }
+  .welcome input { text-align: center; font-size: 1.1rem; }
+  .welcome .id-name { flex: 1; }
+  .welcome .id-tag { width: 84px; }
+  .welcome .hash { font-size: 1.5rem; line-height: 1; color: var(--muted); padding-bottom: 10px; }
+
+  /* ensō */
+  .enso circle { fill: none; stroke-linecap: round; }
+  .enso .track { stroke: var(--line); stroke-width: 6; opacity: .6; }
+  .enso .arc { stroke: var(--ink); stroke-width: 9; transition: stroke-dasharray .8s ease; transform: rotate(-110deg); transform-origin: 80px 80px; }
+  .enso text { font-family: var(--serif); fill: var(--ink); }
+
+  /* top and hero */
+  .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  #status { margin-top: 6px; min-height: 1.6em; color: var(--muted); font-size: 0.9rem; }
+  #status.error { color: var(--loss); }
+  .hero { display: grid; grid-template-columns: 200px 1fr; gap: 48px; align-items: center; margin-top: 40px; }
+  .hero .enso { width: 200px; height: 200px; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px 40px; }
+  .stat b { display: block; font-family: var(--serif); font-weight: 400; font-size: 2.1rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 0.88rem; }
+
+  /* form strip and breakdowns */
+  .strip { display: flex; align-items: flex-end; gap: 7px; height: 84px; border-bottom: 1px solid var(--line); }
+  .tick { flex: 0 0 8px; border-radius: 4px 4px 0 0; background: var(--muted); }
+  .tick.win { background: var(--win); }
+  .tick.loss { background: var(--loss); }
+  .hint { margin-top: 10px; color: var(--muted); font-size: 0.85rem; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; }
+  .brow { display: grid; grid-template-columns: 90px 1fr 44px; align-items: center; gap: 12px; padding: 7px 0; font-size: 0.92rem; }
+  .brow small { display: block; color: var(--muted); font-size: 0.78rem; line-height: 1.2; }
+  .bar { height: 3px; background: var(--line); }
+  .fill { height: 100%; background: var(--win); }
+  .bpct { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); }
+
+  /* log */
+  .log-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .mode-filter-label { width: min(240px, 100%); color: var(--muted); font-size: .82rem; }
+  .mode-filter-label select { margin-top: 3px; }
+  .hint { color: var(--muted); font-size: .84rem; margin: 8px 0 14px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 11px 14px 11px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-weight: 400; color: var(--muted); font-size: 0.85rem; }
+  .r-win { color: var(--win); } .r-loss { color: var(--loss); } .r-draw { color: var(--muted); }
+  td button { padding: 2px 12px; font-size: 0.8rem; }
+
+  /* details */
+  summary { cursor: pointer; font-family: var(--serif); font-size: 1.2rem; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  details[open] summary { margin-bottom: 24px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 20px 28px; margin-bottom: 24px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-top: 18px; }
+  .row label { flex: 1; min-width: 220px; }
+
+  /* polished interactions and account favorites */
+  :root { --paper: #F0EDE6; --panel: #FAF8F3; --ink: #252521; --muted: #77756D; --line: #DCD7CD; --win: #627D68; --loss: #B06452; --wood: #A8875E; }
+  body { background: radial-gradient(ellipse at 50% -15%, #faf8f3 0, var(--paper) 62%); }
+  main { max-width: 1000px; }
+  .top, .hero, section, details { animation: rise-in .45s ease both; }
+  .top { padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+  button, .btn { border-radius: 999px; padding: 10px 18px; box-shadow: 0 1px 0 rgba(30,28,24,.04); }
+  button:hover { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(42,40,37,.10); }
+  button:active { transform: translateY(0) scale(.98); }
+  button:disabled { transform: none; box-shadow: none; }
+  .hero { padding: 28px; border: 1px solid var(--line); border-radius: 20px; background: rgba(250,248,243,.72); box-shadow: 0 12px 35px rgba(42,40,37,.035); }
+  .stats { gap: 30px 44px; }
+  .rank-panel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+  .rank-card { min-width: 0; padding: 20px 22px; border: 1px solid var(--line); border-radius: 16px; background: rgba(250,248,243,.72); }
+  .rank-card .rank-label { display: block; color: var(--muted); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
+  .rank-card strong { display: block; margin-top: 5px; font-family: var(--serif); font-weight: 400; font-size: clamp(1.25rem, 3vw, 1.8rem); line-height: 1.25; overflow-wrap: anywhere; }
+  .rank-card small { display: block; color: var(--muted); margin-top: 5px; font-size: .8rem; }
+  .rank-card .rank-value { font-variant-numeric: tabular-nums; }
+  .stat b { letter-spacing: -.035em; }
+  section h2 { letter-spacing: .01em; }
+  .strip { gap: 6px; padding-top: 4px; }
+  .tick { flex-basis: 10px; transition: height .25s ease, opacity .2s ease; opacity: .9; }
+  .tick:hover { opacity: 1; filter: saturate(1.2); }
+  .table-wrap { border: 1px solid var(--line); border-radius: 14px; background: rgba(250,248,243,.6); padding: 0 16px; }
+  tbody tr { transition: background .18s ease; }
+  tbody tr:hover { background: rgba(168,135,94,.08); }
+  th { position: sticky; top: 0; background: var(--paper); }
+  .favorites-panel { width: min(560px, 100%); margin-top: 20px; }
+  .eyebrow { color: var(--muted); font-size: .72rem; letter-spacing: .15em; }
+  .favorites-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+  .favorite-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 13px; background: rgba(250,248,243,.8); border: 1px solid var(--line); color: var(--ink); border-radius: 999px; font-size: .88rem; }
+  .favorite-chip:hover { background: var(--ink); color: var(--panel); }
+  .import-button { display: inline-flex; align-items: center; cursor: pointer; }
+  .favorite-current[aria-pressed="true"] { background: #E9DFC9; border-color: #C6AD83; color: #4D3E29; }
+  .future-login { margin-top: 24px; font-size: .8rem; }
+  .future-login span { margin-right: 5px; }
+  .status-spinner { display: inline-block; width: 11px; height: 11px; border: 1.5px solid var(--line); border-top-color: var(--ink); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Refined, editorial interface: restrained geometry and clear hierarchy */
+  :root { --paper: #F3F1EB; --panel: #FBFAF6; --ink: #242622; --muted: #777970; --line: #D8D9D1; --win: #55775F; --loss: #B15E4B; --wood: #8D7857; }
+  body { background: var(--paper); font-weight: 400; }
+  main { max-width: 1120px; padding-top: 42px; }
+  button, .btn { border-radius: 4px; padding: 9px 14px; box-shadow: none; font-weight: 500; letter-spacing: .005em; }
+  button:hover, .btn:hover { transform: none; box-shadow: none; }
+  button:active { transform: translateY(1px); }
+  .hero { border-radius: 8px; box-shadow: none; background: var(--panel); }
+  .rank-card { border-radius: 6px; background: var(--panel); }
+  .table-wrap { border-radius: 6px; background: var(--panel); padding: 0 16px; }
+  .favorite-chip, .favorites-list .favorite-chip { border-radius: 4px; }
+  .top { align-items: center; position: relative; z-index: 100; }
+  .actions { align-items: center; gap: 8px; }
+  .actions .quiet { background: transparent; border-color: var(--line); }
+  .actions .quiet:hover { background: #E7E5DE; border-color: #B9BBB2; color: var(--ink); }
+  .account-switcher { position: relative; }
+  .account-menu { position: absolute; z-index: 1000; right: 0; top: calc(100% + 8px); width: min(340px, calc(100vw - 32px)); padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 12px 30px rgba(25,27,23,.12); text-align: left; }
+  .menu-heading { color: var(--muted); text-transform: uppercase; letter-spacing: .09em; font-size: .7rem; font-weight: 600; margin-bottom: 10px; }
+  .switch-favorites { display: grid; gap: 5px; }
+  .switch-favorites:empty::after { content: "No saved favorites yet."; color: var(--muted); font-size: .85rem; padding: 4px 0; }
+  .switch-favorite { display: flex; width: 100%; align-items: center; justify-content: space-between; text-align: left; background: transparent; color: var(--ink); border: 1px solid transparent; border-radius: 3px; padding: 9px 10px; box-shadow: none; }
+  .switch-favorite:hover { background: #EAE9E2; border-color: var(--line); color: var(--ink); }
+  .switch-favorite[aria-current="true"] { background: #E7EAE3; border-color: #C7D0C5; }
+  .switch-favorite small { color: var(--muted); font-size: .75rem; }
+  .menu-divider { height: 1px; background: var(--line); margin: 15px 0; }
+  .switch-account-form { display: grid; grid-template-columns: minmax(0,1fr) 82px; gap: 10px; align-items: end; }
+  .switch-account-form label { min-width: 0; }
+  .switch-account-form button { grid-column: 1 / -1; width: 100%; margin-top: 4px; }
+  .switch-account-form input { padding: 7px 0; }
+  #switch-error { font-size: .8rem; margin-top: 6px; }
+  .mode-filter-label select { padding: 8px 2px; }
+  .rank-label { letter-spacing: .07em; }
+  @media (max-width: 720px) { .account-menu { right: auto; left: 0; } }
+
+  @media (max-width: 720px) {
+    main { padding: 32px 16px 64px; }
+    .hero, .two { grid-template-columns: 1fr; gap: 32px; justify-items: start; }
+    .rank-panel { grid-template-columns: 1fr; }
+    .hero { padding: 20px; width: 100%; }
+    .welcome form { flex-wrap: wrap; justify-content: center; }
+    .welcome .id-name { min-width: 160px; }
+    .actions { width: 100%; }
+    .actions button, .actions .btn { flex: 1; justify-content: center; }
+    section, details { margin-top: 48px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+
+  <section id="welcome" class="welcome" hidden>
+    <svg class="enso" viewBox="0 0 160 160" aria-hidden="true">
+      <circle class="track" cx="80" cy="80" r="70"></circle>
+      <circle class="arc" cx="80" cy="80" r="70" stroke-dasharray="380 440"></circle>
+    </svg>
+    <h1>Valorant tracker <small lang="ja">戦績</small></h1>
+    <p class="muted">Enter your username and tag to see your recent matches.</p>
+    <form id="account-form">
+      <label class="id-name">Username <input id="riot-name" placeholder="lev0nt" autocomplete="off" spellcheck="false" required></label>
+      <span class="hash serif" aria-hidden="true">#</span>
+      <label class="id-tag">Tag <input id="riot-tag" placeholder="101" maxlength="5" autocomplete="off" spellcheck="false" required></label>
+      <button type="submit">Track</button>
+    </form>
+    <p id="welcome-error" class="error" role="alert"></p>
+    <div id="favorites-panel" class="favorites-panel" hidden><p class="eyebrow">YOUR FAVORITES</p><div id="favorites-list" class="favorites-list"></div></div>
+    <p class="future-login muted"><span aria-hidden="true">◉</span> Personal profiles · Google sign-in via Supabase planned</p>
+  </section>
+
+  <div id="app" hidden>
+    <header class="top">
+      <div>
+        <h1 id="who"></h1>
+        <p id="status" role="status" aria-live="polite"></p>
+      </div>
+      <div class="actions">
+        <button id="favorite-current" class="quiet favorite-current" type="button" aria-pressed="false">☆ <span>Favorite</span></button>
+        <button id="sync" type="button"><span class="button-icon" aria-hidden="true">↻</span> Fetch latest</button>
+        <button id="export" class="quiet" type="button">Export data</button>
+        <label class="btn import-button">Import data<input id="import" type="file" accept="application/json" hidden></label>
+        <div class="account-switcher">
+          <button id="change" class="quiet" type="button" aria-expanded="false" aria-controls="account-menu">Change account <span aria-hidden="true">▾</span></button>
+          <div id="account-menu" class="account-menu" hidden>
+            <p class="menu-heading">Switch profile</p>
+            <div id="favorites-switch-list" class="switch-favorites"></div>
+            <div class="menu-divider"></div>
+            <p class="menu-heading">Add another account</p>
+            <form id="switch-account-form" class="switch-account-form">
+              <label>Riot ID <input id="switch-riot-name" placeholder="Username" autocomplete="off" spellcheck="false" required></label>
+              <label>Tag <input id="switch-riot-tag" placeholder="TAG" maxlength="5" autocomplete="off" spellcheck="false" required></label>
+              <button type="submit">Add and switch</button>
+            </form>
+            <p id="switch-error" class="error" role="alert"></p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="hero">
+      <svg class="enso" viewBox="0 0 160 160" role="img" aria-label="Win rate">
+        <circle class="track" cx="80" cy="80" r="70"></circle>
+        <circle id="ring" class="arc" cx="80" cy="80" r="70" stroke-dasharray="0 440"></circle>
+        <text id="ring-pct" x="80" y="88" text-anchor="middle" font-size="30">0%</text>
+        <text x="80" y="108" text-anchor="middle" font-size="9" style="fill:var(--muted)">win rate</text>
+      </svg>
+      <div class="stats">
+        <div class="stat"><b id="s-matches">0</b><span>Matches</span></div>
+        <div class="stat"><b id="s-record">0 – 0</b><span>Wins and losses</span></div>
+        <div class="stat"><b id="s-kd">0.00</b><span>K/D ratio</span></div>
+        <div class="stat"><b id="s-acs">0</b><span>Average combat score</span></div>
+      </div>
+    </div>
+
+    <section class="rank-panel" aria-label="Competitive rank">
+      <article class="rank-card">
+        <span class="rank-label">Current rank</span>
+        <strong id="rank-current">Loading…</strong>
+        <small id="rank-current-season">Competitive</small>
+      </article>
+      <article class="rank-card">
+        <span class="rank-label">Peak rank achieved</span>
+        <strong id="rank-peak">—</strong>
+        <small id="rank-peak-season">All-time peak reported by API</small>
+      </article>
+      <article class="rank-card">
+        <span class="rank-label">Current RR</span>
+        <strong class="rank-value" id="rank-rr">—</strong>
+        <small id="rank-rr-note">Ranked rating</small>
+      </article>
+    </section>
+
+    <section>
+      <h2>Recent form</h2>
+      <div id="strip" class="strip" aria-label="Last 20 matches"></div>
+      <p class="hint">Last 20 matches, oldest on the left. Taller means a higher K/D.</p>
+    </section>
+
+    <section class="two">
+      <div><h2>By agent</h2><div id="by-agent"></div></div>
+      <div><h2>By map</h2><div id="by-map"></div></div>
+    </section>
+
+    <section>
+      <div class="log-heading">
+        <h2>Match log</h2>
+        <label class="mode-filter-label" for="mode-filter">Filter by mode
+          <select id="mode-filter" aria-label="Filter match log by game mode">
+            <option value="all">All game modes</option>
+          </select>
+        </label>
+      </div>
+      <p id="log-count" class="hint" aria-live="polite"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Mode</th><th>Map</th><th>Agent</th><th>Result</th><th>Score</th><th>K / D / A</th><th>ACS</th></tr></thead>
+          <tbody id="log"></tbody>
+        </table>
+      </div>
+      <p id="log-empty" class="empty" hidden>No matches yet. Fetch your latest to load match history.</p>
+    </section>
+
+
+
+
+  </div>
+
+</main>
+<script src="script.js"></script>
+</body>
+</html>
