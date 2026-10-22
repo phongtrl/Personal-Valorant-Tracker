@@ -327,7 +327,7 @@ async function syncMatches() {
   }
 }
 
-/* ---------- Favorite Riot IDs (local-only until Supabase is configured) ---------- */
+/* ---------- Favorite Riot IDs ---------- */
 function getFavorites() {
   try {
     const list = JSON.parse(store.get(KEY_FAVORITES) || "[]");
@@ -628,10 +628,14 @@ function renderLog() {
   renderMapKd(visibleMatches);
   $("log-empty").hidden = visibleMatches.length > 0;
   $("log-empty").textContent = matches.length ? "No matches for this game mode." : "No matches yet. Fetch your latest to load match history.";
+  const shown = showAllMatches ? visibleMatches : visibleMatches.slice(0, LOG_LIMIT);
+  const toggle = $("log-toggle");
+  toggle.hidden = visibleMatches.length <= LOG_LIMIT;
+  toggle.textContent = showAllMatches ? `Show last ${LOG_LIMIT}` : "Show all";
   $("log-count").textContent = matches.length
-    ? `Showing ${visibleMatches.length} of ${matches.length} saved match${matches.length === 1 ? "" : "es"}.`
+    ? `Showing ${showAllMatches || visibleMatches.length <= LOG_LIMIT ? "all " + visibleMatches.length : "the last " + shown.length + " of " + visibleMatches.length} (${matches.length} saved in total).`
     : "Your saved matches will appear here.";
-  visibleMatches.forEach((m) => {
+  shown.forEach((m) => {
     const tr = el("tr");
     [m.date, m.mode, m.map, m.agent].forEach((v) => tr.append(el("td", "", v)));
     tr.append(
@@ -644,4 +648,25 @@ function renderLog() {
   });
 }
 
+/* ---------- Match log length ---------- */
+
+const LOG_LIMIT = 20;
+let showAllMatches = false;
+$("log-toggle").addEventListener("click", () => {
+  showAllMatches = !showAllMatches;
+  renderLog();
+});
+
+/* ---------- "Saved on this device" notice ---------- */
+
+function setupStorageNotice() {
+  const dialog = $("storage-notice");
+  if (!dialog || typeof dialog.showModal !== "function") return;
+  $("storage-link").addEventListener("click", () => dialog.showModal());
+  if (store.get("vt:notice-seen")) return;
+  dialog.showModal();
+  dialog.addEventListener("close", () => store.set("vt:notice-seen", "1"), { once: true });
+}
+
+setupStorageNotice();
 init();
