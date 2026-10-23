@@ -264,6 +264,8 @@ async function fetchRankStats() {
     const peakTier = peak.tier?.name || peak.tier?.name_short || "Unavailable";
     currentNode.textContent = currentTier;
     peakNode.textContent = peakTier;
+    $("rank-current-icon").replaceChildren(rankBadge(currentTier, 40));
+    $("rank-peak-icon").replaceChildren(rankBadge(peakTier, 40));
     rrNode.textContent = Number.isFinite(Number(current.rr)) ? String(current.rr) : "—";
     if (peak.season?.short || peak.season?.id) {
       $("rank-peak-season").textContent = `Peak season: ${peak.season.short || peak.season.id}`;
@@ -274,6 +276,8 @@ async function fetchRankStats() {
     }
   } catch (err) {
     currentNode.textContent = "Unavailable";
+    $("rank-current-icon").replaceChildren();
+    $("rank-peak-icon").replaceChildren();
     peakNode.textContent = "Unavailable";
     rrNode.textContent = "—";
     $("rank-current-season").textContent = "Could not load competitive rank";
@@ -438,7 +442,7 @@ function bindEvents() {
 
   $("favorite-current").addEventListener("click", toggleCurrentFavorite);
   $("sync").addEventListener("click", syncMatches);
-  $("mode-filter").addEventListener("change", renderLog);
+  $("mode-filter").addEventListener("change", () => { modeChosen = true; renderLog(); });
 
   $("export").addEventListener("click", () => {
     const data = { account: account.name + "#" + account.tag, matches };
@@ -566,7 +570,7 @@ function renderBreakdown(id, key) {
   rows.forEach((r) => {
     const row = el("div", "brow");
     const name = el("span", "", r.name);
-    name.append(el("small", "", r.n + (r.n === 1 ? " game" : " games")));
+    name.append(el("small", "", `${r.n} ${r.n === 1 ? "game" : "games"} · K/D ${r.kd.toFixed(2)}`));
     const bar = el("div", "bar");
     const fill = el("div", "fill");
     fill.style.width = pct(r.winRate);
@@ -576,43 +580,13 @@ function renderBreakdown(id, key) {
   });
 }
 
-function renderMapKd(list) {
-  const box = $("by-map-kd");
-  box.replaceChildren();
-  const groups = {};
-  list.forEach((m) => (groups[m.map] = groups[m.map] || []).push(m));
-  const rows = Object.entries(groups)
-    .map(([name, g]) => {
-      const kills = sum(g, "kills");
-      const deaths = sum(g, "deaths");
-      return { name, n: g.length, kills, deaths, kd: deaths ? kills / deaths : kills };
-    })
-    .sort((a, b) => b.kd - a.kd);
-  if (!rows.length) {
-    box.append(el("p", "empty", "No matches to show."));
-    return;
-  }
-  rows.forEach((r) => {
-    const row = el("div", "brow");
-    const name = el("span", "", r.name);
-    name.append(el("small", "", `${r.kills} kills, ${r.deaths} deaths · ${r.n} ${r.n === 1 ? "game" : "games"}`));
-    const bar = el("div", "bar kd");
-    const fill = el("div", "fill");
-    fill.style.width = Math.min(r.kd / 2.5, 1) * 100 + "%";
-    fill.style.background = r.kd >= 1 ? "var(--win)" : "var(--loss)";
-    bar.append(fill);
-    row.append(name, bar, el("span", "bpct", r.kd.toFixed(2)));
-    box.append(row);
-  });
-}
-
 function renderLog() {
   const body = $("log");
   body.replaceChildren();
 
   const filter = $("mode-filter");
-  const selectedMode = filter.value || "all";
   const modes = [...new Set(matches.map((m) => String(m.mode || "Unknown")))].sort((a, b) => a.localeCompare(b));
+  const selectedMode = modeChosen ? (filter.value || "all") : (modes.includes("Competitive") ? "Competitive" : "all");
   const options = [
     { value: "all", label: "All game modes" },
     ...modes.map((mode) => ({ value: mode, label: mode }))
@@ -625,7 +599,6 @@ function renderLog() {
   filter.value = options.some((option) => option.value === selectedMode) ? selectedMode : "all";
 
   const visibleMatches = byDate().filter((m) => filter.value === "all" || String(m.mode || "Unknown") === filter.value);
-  renderMapKd(visibleMatches);
   $("log-empty").hidden = visibleMatches.length > 0;
   $("log-empty").textContent = matches.length ? "No matches for this game mode." : "No matches yet. Fetch your latest to load match history.";
   const shown = showAllMatches ? visibleMatches : visibleMatches.slice(0, LOG_LIMIT);
@@ -637,16 +610,158 @@ function renderLog() {
     : "Your saved matches will appear here.";
   shown.forEach((m) => {
     const tr = el("tr");
-    [m.date, m.mode, m.map, m.agent].forEach((v) => tr.append(el("td", "", v)));
-    tr.append(
-      el("td", "r-" + m.result, m.result[0].toUpperCase() + m.result.slice(1)),
-      el("td", "", `${m.roundsWon} – ${m.roundsLost}`),
-      el("td", "", `${m.kills} / ${m.deaths} / ${m.assists}`),
-      el("td", "", m.acs)
-    );
+    const kd = m.deaths ? m.kills / m.deaths : m.kills;
+    [
+      ["Date", m.date], ["Mode", m.mode], ["Map", m.map], ["Agent", m.agent],
+      ["Result", m.result[0].toUpperCase() + m.result.slice(1), "r-" + m.result],
+      ["Score", `${m.roundsWon} – ${m.roundsLost}`],
+      ["K / D / A", `${m.kills} / ${m.deaths} / ${m.assists}`],
+      ["K/D", kd.toFixed(2)], ["ACS", m.acs],
+    ].forEach(([label, value, cls]) => {
+      const td = el("td", cls || "", String(value ?? ""));
+      td.dataset.label = label;
+      tr.append(td);
+    });
     body.append(tr);
   });
 }
+
+let modeChosen = false;
+
+/* ---------- Rank badges ---------- */
+
+const RANK_TIERS = ["iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal"];
+const RANK_COLORS = { iron: "#6B6E70", bronze: "#9C6B3C", silver: "#A9B1B6", gold: "#D4A62F", platinum: "#3F9DAE", diamond: "#A07BD6", ascendant: "#3E9F6E", immortal: "#C5465F", radiant: "#E4C95A" };
+const CHEVRON_Y = { 1: [32], 2: [27, 37], 3: [23, 32, 41] };
+const STAR = "24,18 26.9,26 35.4,26.3 28.8,31.5 31.1,39.7 24,35 16.9,39.7 19.2,31.5 12.6,26.3 21.1,26";
+
+function parseRank(name) {
+  const m = String(name || "").trim().toLowerCase().match(/^(iron|bronze|silver|gold|platinum|diamond|ascendant|immortal|radiant)\s*(\d)?/);
+  return m ? { tier: m[1], division: m[2] ? Number(m[2]) : 0 } : null;
+}
+
+function rankIndex(name) { // Iron 1 = 0 ... Immortal 3 = 23, Radiant = 24
+  const r = parseRank(name);
+  if (!r) return null;
+  if (r.tier === "radiant") return 24;
+  return RANK_TIERS.indexOf(r.tier) * 3 + Math.max(1, r.division) - 1;
+}
+
+function rankBadge(name, width = 44) {
+  const r = parseRank(name);
+  const color = r ? RANK_COLORS[r.tier] : "#B9B7AD";
+  let inner;
+  if (!r) inner = '<text x="24" y="37" text-anchor="middle" font-size="22" fill="#FBFAF6">?</text>';
+  else if (r.tier === "radiant") inner = `<polygon points="${STAR}" fill="#FBFAF6"/>`;
+  else inner = (CHEVRON_Y[r.division] || CHEVRON_Y[1]).map((y) =>
+    `<path d="M15 ${y} L24 ${y - 8} L33 ${y}" fill="none" stroke="#FBFAF6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`).join("");
+  const span = el("span", "rank-badge");
+  span.innerHTML = `<svg viewBox="0 0 48 56" width="${width}" height="${Math.round(width * 56 / 48)}" role="img"><path d="M24 2 L44 10 V28 C44 40 35 49 24 54 C13 49 4 40 4 28 V10 Z" fill="${color}"/>${inner}</svg>`;
+  span.firstChild.setAttribute("aria-label", name || "Unranked");
+  return span;
+}
+
+/* ---------- Compare ranks (rough estimates) ---------- */
+
+const RR_PER_GAME = 20; // rough size of a win or loss in RR
+
+async function regionFor(name, tag) {
+  try {
+    const json = await api(`/valorant/v2/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
+    return (json.data && json.data.region) || "eu";
+  } catch (e) {
+    if ([401, 403, 404, 429].includes(e.status)) throw e;
+    return "eu";
+  }
+}
+
+async function loadRank(name, tag, region) {
+  const r = region || await regionFor(name, tag);
+  const json = await api(`/valorant/v3/mmr/${encodeURIComponent(r)}/pc/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
+  const cur = (json && json.data && json.data.current) || {};
+  const tierName = (cur.tier && cur.tier.name) || "Unranked";
+  const idx = rankIndex(tierName);
+  const rr = Number(cur.rr) || 0;
+  return { name, tag, tierName, rr, score: idx === null ? null : idx * 100 + rr };
+}
+
+function recentCompetitiveWinRate() {
+  const list = byDate().filter((m) => lower(m.mode) === "competitive").slice(0, 20);
+  return list.length >= 5 ? summarize(list).winRate : null;
+}
+
+function gamesText(gap, winRate) {
+  const net = RR_PER_GAME * (2 * winRate - 1);
+  if (net <= 0) return "Not reachable at this win rate";
+  const games = Math.round(gap / net / 5) * 5;
+  return games < 5 ? "Under 5 games" : `About ${games} games`;
+}
+
+function playerCard(p, label) {
+  const card = el("div", "cmp-card");
+  const text = el("div");
+  text.append(
+    el("small", "", label),
+    el("strong", "", `${p.name}#${p.tag}`),
+    el("span", "r", p.score === null ? "No competitive rank" : `${p.tierName}, ${p.rr} RR`)
+  );
+  card.append(rankBadge(p.score === null ? "" : p.tierName, 40), text);
+  return card;
+}
+
+function renderCompare(me, them) {
+  const box = $("cmp-result");
+  const cards = el("div", "cmp-cards");
+  cards.append(playerCard(me, "You"), playerCard(them, "Them"));
+  box.replaceChildren(cards);
+  if (me.score === null || them.score === null) {
+    box.append(el("p", "hint", "One of you has no competitive rank right now, so there is nothing to compare."));
+    return;
+  }
+  const gap = them.score - me.score;
+  if (gap === 0) {
+    box.append(el("p", "cmp-summary", "You are at the same rating."));
+    return;
+  }
+  const size = Math.abs(gap);
+  const youTrail = gap > 0;
+  box.append(el("p", "cmp-summary", youTrail ? `They are ahead by about ${size} RR.` : `You are ahead by about ${size} RR.`));
+  const rows = [[0.55, "55% win rate"], [0.6, "60% win rate"], [0.65, "65% win rate"]];
+  const mine = recentCompetitiveWinRate();
+  if (youTrail && mine !== null) rows.unshift([mine, `Your recent win rate (${pct(mine)})`]);
+  rows.forEach(([rate, label]) => {
+    const row = el("div", "cmp-row");
+    row.append(el("span", "", label), el("span", "", gamesText(size, rate)));
+    box.append(row);
+  });
+  box.append(el("p", "hint", `Estimated games ${youTrail ? "you need" : "they need"} to catch up, assuming about ±${RR_PER_GAME} RR per game. Rough numbers only: Immortal and Radiant are approximated, and real gains vary with performance.`));
+}
+
+$("cmp-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!account) return;
+  let name = $("cmp-name").value.trim();
+  let tag = $("cmp-tag").value.trim().replace(/^#/, "");
+  const i = name.lastIndexOf("#");
+  if (i > 0 && !tag) { tag = name.slice(i + 1).trim(); name = name.slice(0, i).trim(); }
+  const error = $("cmp-error");
+  if (!name || !/^[A-Za-z0-9]{3,5}$/.test(tag)) {
+    error.textContent = "Enter the other player's username and a tag of 3 to 5 letters or numbers.";
+    return;
+  }
+  error.textContent = "";
+  const button = $("cmp-go");
+  button.disabled = true;
+  $("cmp-result").replaceChildren(el("p", "hint", "Comparing…"));
+  try {
+    const [me, them] = await Promise.all([loadRank(account.name, account.tag, account.region), loadRank(name, tag)]);
+    renderCompare(me, them);
+  } catch (err) {
+    $("cmp-result").replaceChildren();
+    error.textContent = err.message || "Couldn't compare. Try again in a moment.";
+  }
+  button.disabled = false;
+});
 
 /* ---------- Match log length ---------- */
 
