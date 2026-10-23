@@ -1,16 +1,4 @@
-/* Valorant tracker. Works when opened straight from the file (no server needed).
-   data.json is optional: if it loads, it overrides the built-in agent, map and mode lists. */
-
-const DEFAULTS = {
-  modes: ["Competitive", "Premier", "Unrated", "Swiftplay", "Spike Rush"],
-  maps: ["Abyss", "Ascent", "Bind", "Breeze", "Corrode", "Fracture", "Haven", "Icebox", "Lotus", "Pearl", "Split", "Sunset"],
-  agents: [
-    ["Controller", "Clove", "Astra", "Brimstone", "Harbor", "Omen", "Viper"],
-    ["Duelist", "Iso", "Jett", "Neon", "Phoenix", "Raze", "Reyna", "Waylay", "Yoru"],
-    ["Initiator", "Breach", "Fade", "Gekko", "KAY/O", "Skye", "Sova", "Tejo"],
-    ["Sentinel", "Chamber", "Cypher", "Deadlock", "Killjoy", "Sage", "Vyse"],
-  ].flatMap(([role, ...names]) => names.map((name) => ({ name, role }))),
-};
+/* Valorant tracker. Works when opened straight from the file (no server needed). */
 
 const API = "https://api.henrikdev.xyz";
 // Convenience default for this personal static build. Anyone who can access the source can read this key.
@@ -19,9 +7,9 @@ const KEY_ACCOUNT = "vt:account";
 const KEY_API = "vt:apikey";
 const KEY_MATCHES = "vt:matches:";
 const KEY_FAVORITES = "vt:favorites";
+const KEY_TAB = "vt:tab";
 const RING = 2 * Math.PI * 70;
 
-let config = DEFAULTS;
 let account = null; // { name, tag, region }
 let matches = [];
 
@@ -30,6 +18,20 @@ const lower = (s) => String(s || "").toLowerCase();
 const sum = (list, key) => list.reduce((t, m) => t + m[key], 0);
 const pct = (x) => Math.round(x * 100) + "%";
 const today = () => new Date().toISOString().slice(0, 10);
+
+const ID_ERROR = "Enter a username and a tag of 3 to 5 letters or numbers, for example lev0nt and 101.";
+const sameId = (a, b) => lower(a.name) === lower(b.name) && lower(a.tag) === lower(b.tag);
+
+function parseRiotId(nameText, tagText) {
+  let name = String(nameText).trim();
+  let tag = String(tagText).trim().replace(/^#/, "");
+  const i = name.lastIndexOf("#");
+  if (i > 0 && !tag) { // someone pasted "name#tag" into the first box
+    tag = name.slice(i + 1).trim();
+    name = name.slice(0, i).trim();
+  }
+  return name && /^[A-Za-z0-9]{3,5}$/.test(tag) ? { name, tag, region: null } : null;
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -65,18 +67,9 @@ function loadMatches() {
 
 /* ---------- Start up ---------- */
 
-async function init() {
-  try {
-    const res = await fetch("data.json");
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.agents) && Array.isArray(data.maps) && Array.isArray(data.modes)) {
-        config = { agents: data.agents, maps: data.maps, modes: data.modes };
-      }
-    }
-  } catch (e) { /* opened from a file: use the built-in lists */ }
-
+function init() {
   bindEvents();
+  showTab(store.get(KEY_TAB) || "overview");
 
   let saved = null;
   try { saved = JSON.parse(store.get(KEY_ACCOUNT)); } catch (e) { /* none */ }
@@ -103,18 +96,6 @@ function openAccount(acc, autoFetch) {
   renderFavorites();
   render();
   if (autoFetch) syncMatches();
-}
-
-function readAccount() {
-  let name = $("riot-name").value.trim();
-  let tag = $("riot-tag").value.trim().replace(/^#/, "");
-  const i = name.lastIndexOf("#");
-  if (i > 0 && !tag) { // someone pasted "name#tag" into the first box
-    tag = name.slice(i + 1).trim();
-    name = name.slice(0, i).trim();
-  }
-  if (!name || !/^[A-Za-z0-9]{3,5}$/.test(tag)) return null;
-  return { name, tag, region: null };
 }
 
 function setStatus(message, isError = false) {
@@ -171,9 +152,9 @@ async function api(path) {
   return json;
 }
 
-async function lookupRegion() {
+async function lookupRegion(name = account.name, tag = account.tag) {
   try {
-    const json = await api(`/valorant/v2/account/${encodeURIComponent(account.name)}/${encodeURIComponent(account.tag)}`);
+    const json = await api(`/valorant/v2/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
     return (json.data && json.data.region) || "eu";
   } catch (e) {
     if ([401, 403, 404, 429].includes(e.status)) throw e;
@@ -244,6 +225,11 @@ function parseMatch(m) {
 }
 
 
+async function fetchMmr(name, tag, region) {
+  const json = await api(`/valorant/v3/mmr/${encodeURIComponent(region)}/pc/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
+  return (json && json.data) || {};
+}
+
 async function fetchRankStats() {
   const currentNode = $("rank-current");
   const peakNode = $("rank-peak");
@@ -255,9 +241,7 @@ async function fetchRankStats() {
   $("rank-peak-season").textContent = "All-time peak reported by API";
   $("rank-rr-note").textContent = "Ranked rating";
   try {
-    const path = `/valorant/v3/mmr/${encodeURIComponent(account.region)}/pc/${encodeURIComponent(account.name)}/${encodeURIComponent(account.tag)}`;
-    const json = await api(path);
-    const data = json?.data || {};
+    const data = await fetchMmr(account.name, account.tag, account.region);
     const current = data.current || {};
     const peak = data.peak || {};
     const currentTier = current.tier?.name || current.tier?.name_short || "Unranked / unavailable";
@@ -340,7 +324,7 @@ function getFavorites() {
 }
 function isFavorite(acc = account) {
   if (!acc) return false;
-  return getFavorites().some(f => lower(f.name) === lower(acc.name) && lower(f.tag) === lower(acc.tag));
+  return getFavorites().some(f => sameId(f, acc));
 }
 function updateFavoriteButton() {
   const button = $("favorite-current");
@@ -352,7 +336,7 @@ function updateFavoriteButton() {
 function toggleCurrentFavorite() {
   if (!account) return;
   let favorites = getFavorites();
-  if (isFavorite()) favorites = favorites.filter(f => !(lower(f.name) === lower(account.name) && lower(f.tag) === lower(account.tag)));
+  if (isFavorite()) favorites = favorites.filter(f => !sameId(f, account));
   else favorites.push({ name: account.name, tag: account.tag, region: account.region || null });
   store.set(KEY_FAVORITES, JSON.stringify(favorites));
   updateFavoriteButton();
@@ -368,7 +352,7 @@ function renderFavorites() {
     welcomeList.replaceChildren();
     panel.hidden = favorites.length === 0;
     favorites.forEach(f => {
-      const button = el("button", "favorite-chip", `★ ${f.name}#${f.tag}`);
+      const button = el("button", "chip", `★ ${f.name}#${f.tag}`);
       button.type = "button";
       button.addEventListener("click", () => openAccount({ ...f }, true));
       welcomeList.append(button);
@@ -378,11 +362,12 @@ function renderFavorites() {
   if (switchList) {
     switchList.replaceChildren();
     favorites.forEach(f => {
-      const button = el("button", "switch-favorite");
+      const current = !!account && sameId(account, f);
+      const button = el("button", "menu-item");
       button.type = "button";
-      button.setAttribute("aria-current", String(!!account && lower(account.name) === lower(f.name) && lower(account.tag) === lower(f.tag)));
-      button.append(el("span", "", `★  ${f.name}#${f.tag}`));
-      if (account && lower(account.name) === lower(f.name) && lower(account.tag) === lower(f.tag)) button.append(el("small", "", "CURRENT"));
+      button.setAttribute("aria-current", String(current));
+      button.append(el("span", "", `★ ${f.name}#${f.tag}`));
+      if (current) button.append(el("small", "", "CURRENT"));
       button.addEventListener("click", () => {
         closeAccountMenu();
         openAccount({ ...f }, true);
@@ -400,12 +385,45 @@ function closeAccountMenu() {
 
 /* ---------- Events ---------- */
 
+/* ---------- Tabs ---------- */
+
+const TABS = ["overview", "matches", "stats", "compare"];
+
+function showTab(name, focus = false) {
+  if (!TABS.includes(name)) name = "overview";
+  TABS.forEach((t) => {
+    const on = t === name;
+    $("tab-" + t).hidden = !on;
+    const button = $("tabbtn-" + t);
+    button.setAttribute("aria-selected", String(on));
+    button.tabIndex = on ? 0 : -1;
+    if (on && focus) button.focus();
+  });
+  store.set(KEY_TAB, name);
+}
+
+function bindTabs() {
+  const bar = document.querySelector(".tabs");
+  bar.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-tab]");
+    if (button) showTab(button.dataset.tab);
+  });
+  bar.addEventListener("keydown", (e) => {
+    const i = TABS.indexOf(document.activeElement.dataset.tab);
+    const next = { ArrowRight: (i + 1) % TABS.length, ArrowLeft: (i + TABS.length - 1) % TABS.length, Home: 0, End: TABS.length - 1 }[e.key];
+    if (i < 0 || next === undefined) return;
+    e.preventDefault();
+    showTab(TABS[next], true);
+  });
+}
+
 function bindEvents() {
+  bindTabs();
   $("account-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    const acc = readAccount();
+    const acc = parseRiotId($("riot-name").value, $("riot-tag").value);
     if (!acc) {
-      $("welcome-error").textContent = "Enter your username and a tag of 3 to 5 letters or numbers, for example lev0nt and 101.";
+      $("welcome-error").textContent = ID_ERROR;
       return;
     }
     $("welcome-error").textContent = "";
@@ -422,15 +440,13 @@ function bindEvents() {
   });
   $("switch-account-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    const name = $("switch-riot-name").value.trim();
-    const tag = $("switch-riot-tag").value.trim().replace(/^#/, "");
-    if (!name || !/^[A-Za-z0-9]{3,5}$/.test(tag)) {
-      $("switch-error").textContent = "Enter a Riot ID and a tag of 3–5 letters or numbers.";
+    const next = parseRiotId($("switch-riot-name").value, $("switch-riot-tag").value);
+    if (!next) {
+      $("switch-error").textContent = ID_ERROR;
       return;
     }
-    const next = { name, tag, region: null };
     const favorites = getFavorites();
-    if (!favorites.some(f => lower(f.name) === lower(name) && lower(f.tag) === lower(tag))) {
+    if (!favorites.some(f => sameId(f, next))) {
       favorites.push(next);
       store.set(KEY_FAVORITES, JSON.stringify(favorites));
     }
@@ -455,16 +471,6 @@ function bindEvents() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     setStatus(`Exported ${matches.length} matches.`);
   });
-
-
-
-
-
-
-
-
-
-
 
   $("import").addEventListener("change", async (e) => {
     const file = e.target.files[0];
@@ -667,20 +673,9 @@ function rankBadge(name, width = 44) {
 
 const RR_PER_GAME = 20; // rough size of a win or loss in RR
 
-async function regionFor(name, tag) {
-  try {
-    const json = await api(`/valorant/v2/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
-    return (json.data && json.data.region) || "eu";
-  } catch (e) {
-    if ([401, 403, 404, 429].includes(e.status)) throw e;
-    return "eu";
-  }
-}
-
 async function loadRank(name, tag, region) {
-  const r = region || await regionFor(name, tag);
-  const json = await api(`/valorant/v3/mmr/${encodeURIComponent(r)}/pc/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
-  const cur = (json && json.data && json.data.current) || {};
+  const data = await fetchMmr(name, tag, region || await lookupRegion(name, tag));
+  const cur = data.current || {};
   const tierName = (cur.tier && cur.tier.name) || "Unranked";
   const idx = rankIndex(tierName);
   const rr = Number(cur.rr) || 0;
@@ -704,7 +699,7 @@ function gamesText(gap, winRate) {
 }
 
 function ladderEl(me, them) {
-  const box = el("div", "cmp-ladder");
+  const box = el("div", "cmp-ladder card");
   const stage = el("div", "ladder-stage");
   const track = el("div", "ladder-track");
   [...RANK_TIERS, "radiant"].forEach((t) => {
@@ -724,31 +719,33 @@ function ladderEl(me, them) {
     span.style.width = Math.abs(a - b) + "%";
     stage.append(span);
   }
-  [[me, "me", "You", a], [them, "them", them.name, b]].forEach(([, cls, text, left]) => {
-    const pin = el("div", "ladder-pin " + cls);
-    pin.style.left = left + "%";
-    pin.append(el("span", "", text));
-    stage.append(pin);
+  // Markers sit above (you) and below (them) the track, so they never cover each other or any text.
+  [["me", a], ["them", b]].forEach(([cls, left]) => {
+    const mark = el("span", "ladder-mark " + cls);
+    mark.style.left = left + "%";
+    stage.append(mark);
   });
   const ends = el("div", "ladder-ends");
   ends.append(el("span", "", "Iron"), el("span", "", "Radiant"));
-  box.append(stage, ends);
+  const legend = el("div", "ladder-legend");
+  [["me", me, "You"], ["them", them, them.name]].forEach(([cls, p, name]) => {
+    const key = el("span", "ladder-key " + cls);
+    key.append(el("i", "ladder-dot"), document.createTextNode(`${name} · ${p.tierName}, ${p.rr} RR`));
+    legend.append(key);
+  });
+  box.append(stage, ends, legend);
   return box;
 }
 
 function playerPanel(p, label, ahead) {
-  const card = el("div", "cmp-player" + (ahead ? " ahead" : ""));
-  const who = el("div", "who");
-  const meta = el("div", "cmp-meta");
-  meta.append(el("span", "", label));
-  if (ahead) meta.append(el("span", "cmp-ahead", "Ahead"));
-  who.append(
-    meta,
+  const card = el("div", "cmp-player card" + (ahead ? " ahead" : ""));
+  card.append(
+    rankBadge(p.score === null ? "" : p.tierName, 64),
+    el("span", "cmp-label", ahead ? `${label} · ahead` : label),
     el("strong", "cmp-name", `${p.name}#${p.tag}`),
     el("span", "cmp-rank", p.score === null ? "Unranked" : p.tierName),
     el("span", "cmp-rr", p.score === null ? "No competitive rank" : `${p.rr} RR`)
   );
-  card.append(rankBadge(p.score === null ? "" : p.tierName, 56), who);
   return card;
 }
 
@@ -758,16 +755,18 @@ function renderCompare(me, them) {
   const gap = ranked ? them.score - me.score : 0;
   const size = Math.abs(gap);
 
-  const gapBox = el("div", "cmp-gap");
-  if (!ranked) gapBox.append(el("b", "", "—"), el("small", "", "No rank to compare"));
-  else if (gap === 0) gapBox.append(el("b", "", "Even"), el("small", "", "Same rating"));
-  else gapBox.append(el("b", "", `≈ ${size}`), el("small", "", `RR · ${gap > 0 ? "they are ahead" : "you are ahead"}`));
-
   const board = el("div", "cmp-board");
-  board.append(playerPanel(me, "You", ranked && gap < 0), gapBox, playerPanel(them, "Them", ranked && gap > 0));
+  board.append(playerPanel(me, "You", ranked && gap < 0), playerPanel(them, "Them", ranked && gap > 0));
   box.replaceChildren(board);
-  if (!ranked) return;
-  box.append(ladderEl(me, them));
+  if (!ranked) {
+    box.append(el("p", "hint", "One of you has no competitive rank right now, so there is nothing to compare."));
+    return;
+  }
+
+  const summary = el("div", "cmp-summary card");
+  if (gap === 0) summary.append(el("b", "", "Even"), el("span", "", "You are at the same rating."));
+  else summary.append(el("b", "", `≈ ${size} RR`), el("span", "", gap > 0 ? "They are ahead of you." : "You are ahead of them."));
+  box.append(summary, ladderEl(me, them));
   if (gap === 0) return;
 
   const youTrail = gap > 0;
@@ -777,7 +776,7 @@ function renderCompare(me, them) {
   const games = rows.map(([rate]) => gamesFor(size, rate));
   const max = Math.max(1, ...games.filter((g) => g !== null));
 
-  const card = el("div", "cmp-catchup");
+  const card = el("div", "cmp-catchup card");
   card.append(
     el("h3", "", youTrail ? "Your catch-up estimate" : "Their catch-up estimate"),
     el("p", "sub", `Rough number of games ${youTrail ? "you need" : "they need"} to close the gap`)
@@ -800,21 +799,18 @@ let cmpActive = "";
 
 function renderCmpFavorites() {
   const box = $("cmp-favorites");
-  if (!box) return;
   box.replaceChildren();
-  const others = account
-    ? getFavorites().filter((f) => !(lower(f.name) === lower(account.name) && lower(f.tag) === lower(account.tag)))
-    : [];
+  const others = account ? getFavorites().filter((f) => !sameId(f, account)) : [];
   if (!others.length) {
     box.append(el("p", "hint", "Favorite a player with ☆ and they appear here for one-tap comparison."));
     return;
   }
-  box.append(el("p", "cmp-sub", "From your favorites"));
-  const list = el("div", "cmp-chips");
+  box.append(el("p", "sub", "From your favorites"));
+  const list = el("div", "chips");
   others.forEach((f) => {
-    const chip = el("button", "cmp-chip", `${f.name}#${f.tag}`);
+    const chip = el("button", "chip", `${f.name}#${f.tag}`);
     chip.type = "button";
-    chip.setAttribute("aria-pressed", cmpActive === lower(f.name) + "#" + lower(f.tag) ? "true" : "false");
+    chip.setAttribute("aria-pressed", String(cmpActive === lower(f.name) + "#" + lower(f.tag)));
     chip.addEventListener("click", () => runCompare(f.name, f.tag, f.region));
     list.append(chip);
   });
@@ -828,7 +824,7 @@ async function runCompare(name, tag, region) {
   $("cmp-error").textContent = "";
   const go = $("cmp-go");
   go.disabled = true;
-  const loading = el("p", "cmp-loading");
+  const loading = el("p", "hint");
   loading.append(el("span", "status-spinner"), document.createTextNode("Comparing…"));
   $("cmp-result").replaceChildren(loading);
   try {
@@ -843,15 +839,12 @@ async function runCompare(name, tag, region) {
 
 $("cmp-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  let name = $("cmp-name").value.trim();
-  let tag = $("cmp-tag").value.trim().replace(/^#/, "");
-  const i = name.lastIndexOf("#");
-  if (i > 0 && !tag) { tag = name.slice(i + 1).trim(); name = name.slice(0, i).trim(); }
-  if (!name || !/^[A-Za-z0-9]{3,5}$/.test(tag)) {
-    $("cmp-error").textContent = "Enter the other player's username and a tag of 3 to 5 letters or numbers.";
+  const other = parseRiotId($("cmp-name").value, $("cmp-tag").value);
+  if (!other) {
+    $("cmp-error").textContent = ID_ERROR;
     return;
   }
-  runCompare(name, tag);
+  runCompare(other.name, other.tag);
 });
 
 /* ---------- Match log length ---------- */
