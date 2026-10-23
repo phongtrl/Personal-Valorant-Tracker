@@ -15,7 +15,7 @@
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 400 16px/1.6 var(--sans); }
-main { max-width: 1040px; margin: 0 auto; padding: 0 24px 40px; }
+main { max-width: 1040px; margin: 0 auto; padding: 0 24px 40px; overflow-x: clip; }
 p { margin: 0; }
 h1, h2, h3 { margin: 0; font-family: var(--serif); font-weight: 400; }
 h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.15; }
@@ -89,6 +89,10 @@ label { display: grid; gap: 2px; font-size: .82rem; color: var(--muted); }
 .tab:hover { color: var(--ink); background: none; border-color: transparent; }
 .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
 .panel { padding-top: 28px; }
+.panel.from-right { animation: panel-in-right .25s ease; }
+.panel.from-left { animation: panel-in-left .25s ease; }
+@keyframes panel-in-right { from { opacity: 0; transform: translateX(24px); } }
+@keyframes panel-in-left { from { opacity: 0; transform: translateX(-24px); } }
 
 /* ---------- Overview ---------- */
 .hero { display: grid; grid-template-columns: 190px 1fr; gap: 44px; align-items: center; padding: 28px; }

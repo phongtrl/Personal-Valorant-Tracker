@@ -389,11 +389,19 @@ function closeAccountMenu() {
 
 const TABS = ["overview", "matches", "stats", "compare"];
 
+let activeTab = null;
+
 function showTab(name, focus = false) {
   if (!TABS.includes(name)) name = "overview";
+  const dir = activeTab === null || activeTab === name ? "" : TABS.indexOf(name) > TABS.indexOf(activeTab) ? "from-right" : "from-left";
+  activeTab = name;
+  if (dir) window.scrollTo({ top: 0 });
   TABS.forEach((t) => {
     const on = t === name;
-    $("tab-" + t).hidden = !on;
+    const panel = $("tab-" + t);
+    panel.hidden = !on;
+    panel.classList.remove("from-left", "from-right");
+    if (on && dir) panel.classList.add(dir);
     const button = $("tabbtn-" + t);
     button.setAttribute("aria-selected", String(on));
     button.tabIndex = on ? 0 : -1;
@@ -415,6 +423,24 @@ function bindTabs() {
     e.preventDefault();
     showTab(TABS[next], true);
   });
+
+  // Swipe left or right on the page to move between tabs (ignored on scrollable tables, menus and form fields).
+  const app = $("app");
+  let start = null;
+  app.addEventListener("touchstart", (e) => {
+    const blocked = e.target.closest(".table-wrap, .tabs, .menu, input, select");
+    start = e.touches.length === 1 && !blocked ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+  }, { passive: true });
+  app.addEventListener("touchcancel", () => { start = null; }, { passive: true });
+  app.addEventListener("touchend", (e) => {
+    if (!start) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    start = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return; // too short or mostly vertical
+    const next = TABS.indexOf(activeTab) + (dx < 0 ? 1 : -1);
+    if (next >= 0 && next < TABS.length) showTab(TABS[next]);
+  }, { passive: true });
 }
 
 function bindEvents() {
