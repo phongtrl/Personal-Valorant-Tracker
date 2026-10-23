@@ -79,13 +79,15 @@
     <section id="compare">
       <h2>Compare ranks</h2>
       <p class="hint">Roughly how many games it would take to catch up with another player.</p>
+      <div id="cmp-favorites" class="cmp-favorites"></div>
+      <p class="cmp-sub">Or enter a player</p>
       <form id="cmp-form" class="cmp-form">
         <label>Username <input id="cmp-name" placeholder="Username" autocomplete="off" spellcheck="false" required></label>
         <label class="cmp-tag">Tag <input id="cmp-tag" placeholder="TAG" maxlength="5" autocomplete="off" spellcheck="false" required></label>
         <button id="cmp-go" type="submit">Compare</button>
       </form>
       <p id="cmp-error" class="error" role="alert"></p>
-      <div id="cmp-result" class="cmp-result"></div>
+      <div id="cmp-result" class="cmp-result" aria-live="polite"></div>
     </section>
 
     <section>

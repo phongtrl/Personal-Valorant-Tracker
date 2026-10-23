@@ -360,6 +360,7 @@ function toggleCurrentFavorite() {
   setStatus(isFavorite() ? "Added to favorites on this browser." : "Removed from favorites.");
 }
 function renderFavorites() {
+  renderCmpFavorites();
   const favorites = getFavorites();
   const panel = $("favorites-panel");
   const welcomeList = $("favorites-list");
@@ -545,6 +546,7 @@ function render() {
   renderBreakdown("by-agent", "agent");
   renderBreakdown("by-map", "map");
   renderLog();
+  renderCmpFavorites();
 }
 
 function renderStrip() {
@@ -690,77 +692,166 @@ function recentCompetitiveWinRate() {
   return list.length >= 5 ? summarize(list).winRate : null;
 }
 
-function gamesText(gap, winRate) {
+function gamesFor(gap, winRate) {
   const net = RR_PER_GAME * (2 * winRate - 1);
-  if (net <= 0) return "Not reachable at this win rate";
-  const games = Math.round(gap / net / 5) * 5;
-  return games < 5 ? "Under 5 games" : `About ${games} games`;
+  if (net <= 0) return null;
+  return Math.max(0, Math.round(gap / net / 5) * 5);
 }
 
-function playerCard(p, label) {
-  const card = el("div", "cmp-card");
-  const text = el("div");
-  text.append(
-    el("small", "", label),
-    el("strong", "", `${p.name}#${p.tag}`),
-    el("span", "r", p.score === null ? "No competitive rank" : `${p.tierName}, ${p.rr} RR`)
+function gamesText(gap, winRate) {
+  const g = gamesFor(gap, winRate);
+  return g === null ? "Not reachable" : g < 5 ? "Under 5 games" : `About ${g} games`;
+}
+
+function ladderEl(me, them) {
+  const box = el("div", "cmp-ladder");
+  const stage = el("div", "ladder-stage");
+  const track = el("div", "ladder-track");
+  [...RANK_TIERS, "radiant"].forEach((t) => {
+    const seg = el("span", "ladder-seg");
+    seg.style.flexGrow = t === "radiant" ? 1 : 3;
+    seg.style.background = RANK_COLORS[t];
+    seg.title = t[0].toUpperCase() + t.slice(1);
+    track.append(seg);
+  });
+  stage.append(track);
+  const pos = (p) => Math.min(Math.max(p.score / 2500, 0), 1) * 100;
+  const a = pos(me);
+  const b = pos(them);
+  if (Math.abs(a - b) > 0.3) {
+    const span = el("div", "ladder-span");
+    span.style.left = Math.min(a, b) + "%";
+    span.style.width = Math.abs(a - b) + "%";
+    stage.append(span);
+  }
+  [[me, "me", "You", a], [them, "them", them.name, b]].forEach(([, cls, text, left]) => {
+    const pin = el("div", "ladder-pin " + cls);
+    pin.style.left = left + "%";
+    pin.append(el("span", "", text));
+    stage.append(pin);
+  });
+  const ends = el("div", "ladder-ends");
+  ends.append(el("span", "", "Iron"), el("span", "", "Radiant"));
+  box.append(stage, ends);
+  return box;
+}
+
+function playerPanel(p, label, ahead) {
+  const card = el("div", "cmp-player" + (ahead ? " ahead" : ""));
+  const who = el("div", "who");
+  const meta = el("div", "cmp-meta");
+  meta.append(el("span", "", label));
+  if (ahead) meta.append(el("span", "cmp-ahead", "Ahead"));
+  who.append(
+    meta,
+    el("strong", "cmp-name", `${p.name}#${p.tag}`),
+    el("span", "cmp-rank", p.score === null ? "Unranked" : p.tierName),
+    el("span", "cmp-rr", p.score === null ? "No competitive rank" : `${p.rr} RR`)
   );
-  card.append(rankBadge(p.score === null ? "" : p.tierName, 40), text);
+  card.append(rankBadge(p.score === null ? "" : p.tierName, 56), who);
   return card;
 }
 
 function renderCompare(me, them) {
   const box = $("cmp-result");
-  const cards = el("div", "cmp-cards");
-  cards.append(playerCard(me, "You"), playerCard(them, "Them"));
-  box.replaceChildren(cards);
-  if (me.score === null || them.score === null) {
-    box.append(el("p", "hint", "One of you has no competitive rank right now, so there is nothing to compare."));
-    return;
-  }
-  const gap = them.score - me.score;
-  if (gap === 0) {
-    box.append(el("p", "cmp-summary", "You are at the same rating."));
-    return;
-  }
+  const ranked = me.score !== null && them.score !== null;
+  const gap = ranked ? them.score - me.score : 0;
   const size = Math.abs(gap);
+
+  const gapBox = el("div", "cmp-gap");
+  if (!ranked) gapBox.append(el("b", "", "—"), el("small", "", "No rank to compare"));
+  else if (gap === 0) gapBox.append(el("b", "", "Even"), el("small", "", "Same rating"));
+  else gapBox.append(el("b", "", `≈ ${size}`), el("small", "", `RR · ${gap > 0 ? "they are ahead" : "you are ahead"}`));
+
+  const board = el("div", "cmp-board");
+  board.append(playerPanel(me, "You", ranked && gap < 0), gapBox, playerPanel(them, "Them", ranked && gap > 0));
+  box.replaceChildren(board);
+  if (!ranked) return;
+  box.append(ladderEl(me, them));
+  if (gap === 0) return;
+
   const youTrail = gap > 0;
-  box.append(el("p", "cmp-summary", youTrail ? `They are ahead by about ${size} RR.` : `You are ahead by about ${size} RR.`));
   const rows = [[0.55, "55% win rate"], [0.6, "60% win rate"], [0.65, "65% win rate"]];
   const mine = recentCompetitiveWinRate();
   if (youTrail && mine !== null) rows.unshift([mine, `Your recent win rate (${pct(mine)})`]);
-  rows.forEach(([rate, label]) => {
+  const games = rows.map(([rate]) => gamesFor(size, rate));
+  const max = Math.max(1, ...games.filter((g) => g !== null));
+
+  const card = el("div", "cmp-catchup");
+  card.append(
+    el("h3", "", youTrail ? "Your catch-up estimate" : "Their catch-up estimate"),
+    el("p", "sub", `Rough number of games ${youTrail ? "you need" : "they need"} to close the gap`)
+  );
+  rows.forEach(([rate, label], i) => {
+    const g = games[i];
+    const bar = el("div", "bar");
+    const fill = el("div", "fill");
+    fill.style.width = g === null ? "0%" : Math.max(4, (g / max) * 100) + "%";
+    bar.append(fill);
     const row = el("div", "cmp-row");
-    row.append(el("span", "", label), el("span", "", gamesText(size, rate)));
-    box.append(row);
+    row.append(el("span", "", label), bar, el("span", "est" + (g === null ? " no" : ""), gamesText(size, rate)));
+    card.append(row);
   });
-  box.append(el("p", "hint", `Estimated games ${youTrail ? "you need" : "they need"} to catch up, assuming about ±${RR_PER_GAME} RR per game. Rough numbers only: Immortal and Radiant are approximated, and real gains vary with performance.`));
+  card.append(el("p", "cmp-note", `Assumes about ±${RR_PER_GAME} RR per game. Immortal and Radiant are approximated, and real gains vary with performance.`));
+  box.append(card);
 }
 
-$("cmp-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+let cmpActive = "";
+
+function renderCmpFavorites() {
+  const box = $("cmp-favorites");
+  if (!box) return;
+  box.replaceChildren();
+  const others = account
+    ? getFavorites().filter((f) => !(lower(f.name) === lower(account.name) && lower(f.tag) === lower(account.tag)))
+    : [];
+  if (!others.length) {
+    box.append(el("p", "hint", "Favorite a player with ☆ and they appear here for one-tap comparison."));
+    return;
+  }
+  box.append(el("p", "cmp-sub", "From your favorites"));
+  const list = el("div", "cmp-chips");
+  others.forEach((f) => {
+    const chip = el("button", "cmp-chip", `${f.name}#${f.tag}`);
+    chip.type = "button";
+    chip.setAttribute("aria-pressed", cmpActive === lower(f.name) + "#" + lower(f.tag) ? "true" : "false");
+    chip.addEventListener("click", () => runCompare(f.name, f.tag, f.region));
+    list.append(chip);
+  });
+  box.append(list);
+}
+
+async function runCompare(name, tag, region) {
   if (!account) return;
+  cmpActive = lower(name) + "#" + lower(tag);
+  renderCmpFavorites();
+  $("cmp-error").textContent = "";
+  const go = $("cmp-go");
+  go.disabled = true;
+  const loading = el("p", "cmp-loading");
+  loading.append(el("span", "status-spinner"), document.createTextNode("Comparing…"));
+  $("cmp-result").replaceChildren(loading);
+  try {
+    const [me, them] = await Promise.all([loadRank(account.name, account.tag, account.region), loadRank(name, tag, region)]);
+    renderCompare(me, them);
+  } catch (err) {
+    $("cmp-result").replaceChildren();
+    $("cmp-error").textContent = err.message || "Couldn't compare. Try again in a moment.";
+  }
+  go.disabled = false;
+}
+
+$("cmp-form").addEventListener("submit", (e) => {
+  e.preventDefault();
   let name = $("cmp-name").value.trim();
   let tag = $("cmp-tag").value.trim().replace(/^#/, "");
   const i = name.lastIndexOf("#");
   if (i > 0 && !tag) { tag = name.slice(i + 1).trim(); name = name.slice(0, i).trim(); }
-  const error = $("cmp-error");
   if (!name || !/^[A-Za-z0-9]{3,5}$/.test(tag)) {
-    error.textContent = "Enter the other player's username and a tag of 3 to 5 letters or numbers.";
+    $("cmp-error").textContent = "Enter the other player's username and a tag of 3 to 5 letters or numbers.";
     return;
   }
-  error.textContent = "";
-  const button = $("cmp-go");
-  button.disabled = true;
-  $("cmp-result").replaceChildren(el("p", "hint", "Comparing…"));
-  try {
-    const [me, them] = await Promise.all([loadRank(account.name, account.tag, account.region), loadRank(name, tag)]);
-    renderCompare(me, them);
-  } catch (err) {
-    $("cmp-result").replaceChildren();
-    error.textContent = err.message || "Couldn't compare. Try again in a moment.";
-  }
-  button.disabled = false;
+  runCompare(name, tag);
 });
 
 /* ---------- Match log length ---------- */
