@@ -110,9 +110,10 @@
           </div>
         </div>
         <p id="log-count" class="hint" aria-live="polite"></p>
+        <p class="hint">Select a match to see every player, K/D, ACS and who dominated who.</p>
         <div class="table-wrap card">
           <table>
-            <thead><tr><th>Date</th><th>Mode</th><th>Map</th><th>Agent</th><th>Result</th><th>Score</th><th>K / D / A</th><th>K/D</th><th>ACS</th></tr></thead>
+            <thead><tr><th>Date</th><th>Mode</th><th>Map</th><th>Agent</th><th>Result</th><th>Score</th><th>K / D / A</th><th>K/D</th><th>ACS</th><th aria-label="Details"></th></tr></thead>
             <tbody id="log"></tbody>
           </table>
         </div>
@@ -149,6 +150,16 @@
 
   <p class="foot">Match data from the unofficial HenrikDev API. Not affiliated with Riot Games. <button id="storage-link" class="link" type="button">Where is my data saved?</button></p>
 </main>
+
+<dialog id="match-detail" class="sheet" aria-labelledby="md-title">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <div><h2 id="md-title"></h2><p id="md-sub" class="muted"></p></div>
+      <button id="md-close" class="quiet" type="button">Close</button>
+    </div>
+    <div id="md-body"></div>
+  </div>
+</dialog>
 
 <dialog id="storage-notice" aria-labelledby="storage-title">
   <form method="dialog">

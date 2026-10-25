@@ -177,6 +177,37 @@ tbody tr:hover { background: rgba(141,120,87,.07); }
 .cmp-row .est.no { color: var(--muted); }
 .cmp-note { margin-top: 12px; font-size: .8rem; color: var(--muted); }
 
+/* ---------- Match details ---------- */
+tbody tr[data-match] { cursor: pointer; }
+td.row-action { text-align: right; }
+button.small { padding: 4px 12px; font-size: .8rem; }
+body:has(dialog[open]) { overflow: hidden; }
+dialog.sheet { width: min(980px, calc(100% - 32px)); max-width: none; max-height: min(92vh, 920px); padding: 0; overflow: auto; }
+.sheet-inner { padding: 22px 24px 28px; }
+.sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.sheet-head h2 { margin-bottom: 2px; }
+.md-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.md-chip { padding: 6px 12px; font-size: .84rem; background: var(--paper); border: 1px solid var(--line); border-radius: 999px; }
+.team { margin-top: 24px; }
+.team-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px; font: 1.1rem var(--serif); }
+.team-head .res { font: 500 .85rem var(--sans); }
+.pl-head, .pl-row { display: grid; grid-template-columns: minmax(0, 2.4fr) 92px 56px 56px 56px 56px 66px; gap: 8px; align-items: center; }
+.pl-head { padding: 6px 12px; font-size: .74rem; color: var(--muted); }
+.pl-row { width: 100%; padding: 10px 12px; font-weight: 400; text-align: left; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 8px; font-variant-numeric: tabular-nums; }
+.pl-row:hover { color: var(--ink); background: var(--hover); border-color: var(--line); }
+.pl-row[aria-pressed="true"] { background: #E6EBE3; border-color: #C5D0C4; }
+.pl-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pl-text { min-width: 0; }
+.pl-text strong { display: block; font-weight: 500; overflow-wrap: anywhere; }
+.pl-text small { display: block; font-size: .76rem; color: var(--muted); }
+.duels { margin-top: 32px; }
+.duels h3 { font-size: 1.1rem; }
+.duel-row { display: grid; grid-template-columns: minmax(110px, 1.2fr) minmax(0, 2fr) 96px; gap: 14px; align-items: center; padding: 9px 0; font-size: .92rem; border-top: 1px solid var(--line); }
+.duel-row small { display: block; font-size: .76rem; color: var(--muted); }
+.duel-row .bar { background: rgba(169,80,63,.5); }
+.duel-row .bar.idle { background: var(--line); }
+.duel-score { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 /* ---------- Footer and dialog ---------- */
 .foot { margin-top: 64px; padding-top: 18px; text-align: center; font-size: .8rem; color: var(--muted); border-top: 1px solid var(--line); }
 dialog { max-width: 420px; padding: 24px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
@@ -199,6 +230,7 @@ dialog p { margin-bottom: 18px; }
 }
 
 @media (max-width: 640px) {
+  body { touch-action: pan-y pinch-zoom; } /* phones: sideways drags belong to the tab swipe, not the browser */
   .brand { width: 100%; }
   .actions { width: 100%; }
   .actions > button, .actions > .account-switcher { flex: 1 1 auto; }
@@ -213,6 +245,16 @@ dialog p { margin-bottom: 18px; }
   tbody tr:hover { background: var(--card); }
   td { padding: 0; white-space: normal; border: 0; }
   td::before { content: attr(data-label); display: block; font-size: .72rem; color: var(--muted); }
+  td.row-action { grid-column: 1 / -1; text-align: left; }
+  td.row-action::before { content: none; }
+  dialog.sheet { width: 100%; height: 100%; max-height: none; margin: 0; border: 0; border-radius: 0; }
+  .sheet-inner { padding: 16px 16px 28px; }
+  .pl-head { display: none; }
+  .pl-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; }
+  .pl-name { grid-column: 1 / -1; }
+  .pl-row > span[data-label]::before { content: attr(data-label); display: block; font-size: .68rem; color: var(--muted); }
+  .duel-row { grid-template-columns: 1fr auto; gap: 6px 12px; }
+  .duel-row .bar { grid-column: 1 / -1; order: 3; }
   /* tabs become a bottom navigation bar on phones */
   .tabs { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; justify-content: space-around; margin: 0; padding: 0 8px env(safe-area-inset-bottom); background: rgba(242,239,232,.96); backdrop-filter: blur(8px); border-top: 1px solid var(--line); border-bottom: 0; }
   .tab { flex: 1; margin: 0; padding: 14px 4px; font-size: .82rem; border-bottom: 0; border-top: 2px solid transparent; }

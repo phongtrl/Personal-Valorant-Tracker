@@ -162,6 +162,53 @@ async function lookupRegion(name = account.name, tag = account.tag) {
   }
 }
 
+function extractDetails(m, played, teamId) {
+  const list = Array.isArray(m?.players) ? m.players : [];
+  const idOf = (p) => String(p?.puuid || `${lower(p?.name)}#${lower(p?.tag)}`);
+  const players = list.map((p) => {
+    const s = p?.stats || {};
+    const head = Number(s.headshots) || 0;
+    const shots = head + (Number(s.bodyshots) || 0) + (Number(s.legshots) || 0);
+    return {
+      key: idOf(p),
+      name: String(p?.name || "Unknown"), tag: String(p?.tag || ""),
+      team: String(p?.team_id ?? p?.team ?? ""),
+      agent: String(p?.agent?.name || "Unknown"),
+      tier: String(p?.tier?.name || ""),
+      kills: Number(s.kills) || 0, deaths: Number(s.deaths) || 0, assists: Number(s.assists) || 0,
+      acs: played > 0 ? Math.round((Number(s.score) || 0) / played) : 0,
+      adr: played > 0 ? Math.round((Number(s.damage?.dealt) || 0) / played) : 0,
+      hs: shots ? Math.round((head / shots) * 100) : 0,
+      fb: 0, fd: 0,
+    };
+  });
+  if (!players.length) return null;
+
+  const index = new Map(players.map((p, i) => [p.key, i]));
+  const duelCount = new Map();
+  const opening = new Map(); // round -> earliest kill of that round
+  (Array.isArray(m?.kills) ? m.kills : []).forEach((k) => {
+    const killer = index.get(idOf(k?.killer));
+    const victim = index.get(idOf(k?.victim));
+    if (killer === undefined || victim === undefined) return;
+    const key = killer + ">" + victim;
+    duelCount.set(key, (duelCount.get(key) || 0) + 1);
+    const time = Number(k?.time_in_round_in_ms);
+    if (Number.isFinite(k?.round) && Number.isFinite(time) && (!opening.has(k.round) || time < opening.get(k.round).time)) {
+      opening.set(k.round, { time, killer, victim });
+    }
+  });
+  opening.forEach(({ killer, victim }) => { players[killer].fb++; players[victim].fd++; });
+
+  const teams = {};
+  (Array.isArray(m?.teams) ? m.teams : []).forEach((t) => {
+    const id = String(t?.team_id ?? t?.team ?? "");
+    if (id) teams[id] = { won: Number(t?.rounds?.won) || 0, lost: Number(t?.rounds?.lost) || 0 };
+  });
+  const duels = [...duelCount].map(([key, n]) => [...key.split(">").map(Number), n]);
+  return { myTeam: String(teamId ?? ""), teams, players, duels };
+}
+
 function parseMatch(m) {
   const meta = m?.metadata || m?.meta || {};
   const players = Array.isArray(m?.players) ? m.players : [];
@@ -211,6 +258,7 @@ function parseMatch(m) {
   const agent = me?.agent?.name ?? me?.agent?.display_name ?? me?.character?.name ?? me?.agent_name;
   const map = meta?.map?.name ?? meta?.map_name ?? "Unknown";
   const queue = meta?.queue?.name ?? meta?.queue?.id ?? meta?.mode ?? "Unknown";
+  const details = extractDetails(m, played, teamId);
   return {
     id: String(meta.match_id ?? meta.id),
     date: Number.isFinite(startedMs) ? new Date(startedMs).toISOString().slice(0, 10) : (String(started || "").slice(0, 10) || today()),
@@ -220,7 +268,8 @@ function parseMatch(m) {
     roundsLost: Number.isFinite(lost) ? lost : 0,
     kills, deaths, assists,
     acs: played > 0 ? Math.round(score / played) : Math.round(score),
-    result
+    result,
+    ...(details ? { details } : {})
   };
 }
 
@@ -424,27 +473,42 @@ function bindTabs() {
     showTab(TABS[next], true);
   });
 
-  // Swipe left or right on the page to move between tabs (ignored on scrollable tables, menus and form fields).
-  const app = $("app");
+  // Swipe left or right anywhere on the page to move between tabs.
+  // Ignored on sideways-scrolling areas, form fields, open menus or dialogs, and the welcome screen.
   let start = null;
-  app.addEventListener("touchstart", (e) => {
-    const blocked = e.target.closest(".table-wrap, .tabs, .menu, input, select");
-    start = e.touches.length === 1 && !blocked ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
-  }, { passive: true });
-  app.addEventListener("touchcancel", () => { start = null; }, { passive: true });
-  app.addEventListener("touchend", (e) => {
+  let last = null;
+  const canSwipeFrom = (target) => {
+    if (!target || target.closest("input, select, textarea, .menu")) return false;
+    if ($("app").hidden || document.querySelector("dialog[open]")) return false;
+    for (let node = target; node && node !== document.body; node = node.parentElement) {
+      const overflowX = getComputedStyle(node).overflowX;
+      if ((overflowX === "auto" || overflowX === "scroll") && node.scrollWidth > node.clientWidth + 1) return false;
+    }
+    return true;
+  };
+  const finishSwipe = (x, y) => {
     if (!start) return;
-    const dx = e.changedTouches[0].clientX - start.x;
-    const dy = e.changedTouches[0].clientY - start.y;
+    const dx = x - start.x;
+    const dy = y - start.y;
     start = null;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return; // too short or mostly vertical
     const next = TABS.indexOf(activeTab) + (dx < 0 ? 1 : -1);
     if (next >= 0 && next < TABS.length) showTab(TABS[next]);
+  };
+  document.addEventListener("touchstart", (e) => {
+    start = e.touches.length === 1 && canSwipeFrom(e.target) ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    last = start;
   }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (start && e.touches.length === 1) last = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, { passive: true });
+  document.addEventListener("touchend", (e) => finishSwipe(e.changedTouches[0].clientX, e.changedTouches[0].clientY), { passive: true });
+  document.addEventListener("touchcancel", () => { if (last) finishSwipe(last.x, last.y); start = null; }, { passive: true });
 }
 
 function bindEvents() {
   bindTabs();
+  bindMatchDetail();
   $("account-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const acc = parseRiotId($("riot-name").value, $("riot-tag").value);
@@ -656,6 +720,14 @@ function renderLog() {
       td.dataset.label = label;
       tr.append(td);
     });
+    tr.dataset.match = m.id;
+    const action = el("td", "row-action");
+    const open = el("button", "quiet small", "Details");
+    open.type = "button";
+    open.dataset.match = m.id;
+    open.setAttribute("aria-label", `Open details for the ${m.map} match on ${m.date}`);
+    action.append(open);
+    tr.append(action);
     body.append(tr);
   });
 }
@@ -872,6 +944,150 @@ $("cmp-form").addEventListener("submit", (e) => {
   }
   runCompare(other.name, other.tag);
 });
+
+/* ---------- Match details ---------- */
+
+let detailMatch = null;
+let detailPick = 0;
+const kdOf = (p) => (p.deaths ? p.kills / p.deaths : p.kills);
+const isMine = (p) => !!account && lower(p.name) === lower(account.name) && lower(p.tag) === lower(account.tag);
+
+function openMatch(id) {
+  const m = matches.find((x) => String(x.id) === String(id));
+  if (!m) return;
+  detailMatch = m;
+  detailPick = m.details ? Math.max(0, m.details.players.findIndex(isMine)) : 0;
+  renderMatchDetail();
+  const dialog = $("match-detail");
+  if (!dialog.open) dialog.showModal();
+  dialog.scrollTop = 0;
+}
+
+function highlightsEl(d) {
+  const box = el("div", "md-chips");
+  const best = (key) => d.players.reduce((a, b) => (b[key] > a[key] ? b : a));
+  const top = best("acs");
+  box.append(el("span", "md-chip", `Top score: ${top.name} (ACS ${top.acs})`));
+  const dmg = best("adr");
+  box.append(el("span", "md-chip", `Most damage per round: ${dmg.name} (${dmg.adr})`));
+  const fb = best("fb");
+  if (fb.fb >= 2) box.append(el("span", "md-chip", `Most first bloods: ${fb.name} (${fb.fb})`));
+  return box;
+}
+
+function playerRow(p, i) {
+  const row = el("button", "pl-row");
+  row.type = "button";
+  row.setAttribute("aria-pressed", String(i === detailPick));
+  const who = el("span", "pl-name");
+  if (p.tier && parseRank(p.tier)) who.append(rankBadge(p.tier, 22));
+  const text = el("span", "pl-text");
+  text.append(el("strong", "", `${p.name}#${p.tag}${isMine(p) ? " · you" : ""}`), el("small", "", p.agent + (p.tier ? ` · ${p.tier}` : "")));
+  who.append(text);
+  const kd = kdOf(p);
+  const cells = [
+    ["K / D / A", `${p.kills} / ${p.deaths} / ${p.assists}`],
+    ["K/D", kd.toFixed(2), kd >= 1 ? "r-win" : "r-loss"],
+    ["ACS", p.acs], ["ADR", p.adr], ["HS%", p.hs + "%"], ["FB / FD", `${p.fb} / ${p.fd}`],
+  ];
+  row.append(who, ...cells.map(([label, value, cls]) => {
+    const cell = el("span", cls || "", String(value));
+    cell.dataset.label = label;
+    return cell;
+  }));
+  row.addEventListener("click", () => { detailPick = i; renderMatchDetail(); });
+  return row;
+}
+
+function teamEl(d, id, label) {
+  const box = el("section", "team");
+  const head = el("div", "team-head");
+  head.append(el("span", "", label));
+  const t = d.teams[id];
+  if (t) {
+    const outcome = t.won > t.lost ? "Won" : t.won < t.lost ? "Lost" : "Draw";
+    head.append(el("span", "res " + (t.won > t.lost ? "r-win" : t.won < t.lost ? "r-loss" : "r-draw"), `${outcome} ${t.won} – ${t.lost}`));
+  }
+  const labels = el("div", "pl-head");
+  ["Player", "K / D / A", "K/D", "ACS", "ADR", "HS%", "FB / FD"].forEach((l) => labels.append(el("span", "", l)));
+  box.append(head, labels);
+  d.players
+    .map((p, i) => [p, i])
+    .filter(([p]) => p.team === id)
+    .sort((a, b) => b[0].acs - a[0].acs)
+    .forEach(([p, i]) => box.append(playerRow(p, i)));
+  return box;
+}
+
+function duelsEl(d) {
+  const sel = d.players[detailPick];
+  const box = el("section", "duels");
+  box.append(el("h3", "", `Duels: ${sel.name}`), el("p", "hint", "Kills against each opponent, and how often they killed back. Select any player above to see theirs."));
+  if (!d.duels.length) {
+    box.append(el("p", "empty", "The API didn't return kill details for this match."));
+    return box;
+  }
+  const count = (a, b) => (d.duels.find(([x, y]) => x === a && y === b) || [0, 0, 0])[2];
+  d.players
+    .map((p, i) => ({ p, k: count(detailPick, i), back: count(i, detailPick) }))
+    .filter(({ p }) => p.team !== sel.team)
+    .sort((a, b) => (b.k - b.back) - (a.k - a.back) || b.k - a.k)
+    .forEach(({ p, k, back }) => {
+      const net = k - back;
+      const name = el("span", "");
+      name.append(document.createTextNode(p.name), el("small", "", p.agent));
+      const bar = el("div", "bar" + (k + back ? "" : " idle"));
+      const fill = el("div", "fill");
+      fill.style.width = k + back ? (k / (k + back)) * 100 + "%" : "0%";
+      bar.append(fill);
+      const score = el("span", "duel-score");
+      score.append(document.createTextNode(`${k} – ${back} `), el("span", net > 0 ? "r-win" : net < 0 ? "r-loss" : "r-draw", net > 0 ? `+${net}` : String(net)));
+      const row = el("div", "duel-row");
+      row.append(name, bar, score);
+      box.append(row);
+    });
+  return box;
+}
+
+function renderMatchDetail() {
+  const m = detailMatch;
+  const dialog = $("match-detail");
+  const scroll = dialog.scrollTop;
+  $("md-title").textContent = `${m.map} · ${m.mode}`;
+  $("md-sub").textContent = `${m.date} · ${m.result[0].toUpperCase() + m.result.slice(1)} ${m.roundsWon} – ${m.roundsLost}`;
+  const body = $("md-body");
+  const d = m.details;
+  if (!d) {
+    const fetchAgain = el("button", "", "Fetch latest");
+    fetchAgain.type = "button";
+    fetchAgain.addEventListener("click", () => { dialog.close(); syncMatches(); });
+    body.replaceChildren(
+      el("p", "", "Player details aren't saved for this match yet. Press Fetch latest to load them. The API only returns your most recent matches, so older ones can't be filled in."),
+      fetchAgain
+    );
+    return;
+  }
+  const mine = d.players.find(isMine);
+  const myTeam = d.myTeam || (mine && mine.team) || d.players[0].team;
+  const otherTeams = [...new Set(d.players.map((p) => p.team))].filter((t) => t !== myTeam);
+  body.replaceChildren(
+    highlightsEl(d),
+    teamEl(d, myTeam, "Your team"),
+    ...otherTeams.map((t) => teamEl(d, t, "Opponents")),
+    duelsEl(d)
+  );
+  dialog.scrollTop = scroll;
+}
+
+function bindMatchDetail() {
+  $("log").addEventListener("click", (e) => {
+    const target = e.target.closest("[data-match]");
+    if (target) openMatch(target.dataset.match);
+  });
+  const dialog = $("match-detail");
+  $("md-close").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); }); // click on the dimmed backdrop
+}
 
 /* ---------- Match log length ---------- */
 
