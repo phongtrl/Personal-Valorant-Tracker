@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valorant tracker</title>
+<meta name="theme-color" content="#F2EFE8">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<script>/* set the theme before first paint (script.js keeps it updated) */
+try { var p = localStorage.getItem("vt:theme") || "auto"; document.documentElement.dataset.theme = (p === "dark" || (p === "auto" && matchMedia("(prefers-color-scheme: dark)").matches)) ? "dark" : "light"; } catch (e) {}
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+
+  <!-- First screen: choose who to track -->
+  <section id="welcome" class="welcome" hidden>
+    <h1>Valorant tracker</h1>
+    <p class="muted">Enter your username and tag to see your recent matches.</p>
+    <form id="account-form" class="id-form">
+      <label class="grow">Username <input id="riot-name" placeholder="lev0nt" autocomplete="off" spellcheck="false" required></label>
+      <span class="hash" aria-hidden="true">#</span>
+      <label class="tag">Tag <input id="riot-tag" placeholder="101" maxlength="5" autocomplete="off" spellcheck="false" required></label>
+      <button type="submit">Track</button>
+    </form>
+    <p id="welcome-error" class="error" role="alert"></p>
+    <div id="favorites-panel" hidden>
+      <p class="muted">Favorites</p>
+      <div id="favorites-list" class="chips"></div>
+    </div>
+  </section>
+
+  <div id="app" hidden>
+
+    <header class="topbar">
+      <a class="brand" href="./">Valorant tracker</a>
+      <div class="actions">
+        <button id="favorite-current" class="quiet" type="button" aria-pressed="false">☆ <span>Add favorite</span></button>
+        <button id="sync" type="button"><span class="button-icon" aria-hidden="true">↻</span> Fetch latest</button>
+        <div class="account-switcher">
+          <button id="change" class="quiet" type="button" aria-expanded="false" aria-controls="account-menu">Account <span aria-hidden="true">▾</span></button>
+          <div id="account-menu" class="menu card" hidden>
+            <p class="menu-heading">Switch profile</p>
+            <div id="favorites-switch-list" class="menu-list"></div>
+            <p class="menu-heading">Add another account</p>
+            <form id="switch-account-form" class="menu-form">
+              <label class="grow">Username <input id="switch-riot-name" autocomplete="off" spellcheck="false" required></label>
+              <label class="tag">Tag <input id="switch-riot-tag" maxlength="5" autocomplete="off" spellcheck="false" required></label>
+              <button type="submit">Add and switch</button>
+            </form>
+            <p id="switch-error" class="error" role="alert"></p>
+            <p class="menu-heading">Appearance</p>
+            <div class="appearance">
+              <button class="chip" type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
+              <button class="chip" type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+              <button class="chip" type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+            </div>
+            <p class="menu-heading">Data on this device</p>
+            <p id="backup-info" class="hint"></p>
+            <div class="menu-row">
+              <button id="export" class="quiet" type="button">Export</button>
+              <label class="btn">Import<input id="import" type="file" accept="application/json" hidden></label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="profile">
+      <div>
+        <h1 id="who"></h1>
+        <p id="status" role="status" aria-live="polite"></p>
+      </div>
+      <label for="mode-filter">Game mode
+        <select id="mode-filter" aria-label="Game mode for all tabs"><option value="all">All game modes</option></select>
+      </label>
+    </div>
+
+    <div id="backup-note" class="note backup" hidden>
+      <span>It has been a while since your last backup. Your history is saved only in this browser.</span>
+      <span class="backup-actions"><button id="backup-now" type="button" class="small">Export now</button><button id="backup-later" type="button" class="quiet small">Later</button></span>
+    </div>
+
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button id="tabbtn-overview" class="tab" role="tab" type="button" aria-controls="tab-overview" aria-selected="true" data-tab="overview">Overview</button>
+      <button id="tabbtn-matches" class="tab" role="tab" type="button" aria-controls="tab-matches" aria-selected="false" tabindex="-1" data-tab="matches">Matches</button>
+      <button id="tabbtn-stats" class="tab" role="tab" type="button" aria-controls="tab-stats" aria-selected="false" tabindex="-1" data-tab="stats">Stats</button>
+      <button id="tabbtn-progress" class="tab" role="tab" type="button" aria-controls="tab-progress" aria-selected="false" tabindex="-1" data-tab="progress">Progress</button>
+      <button id="tabbtn-compare" class="tab" role="tab" type="button" aria-controls="tab-compare" aria-selected="false" tabindex="-1" data-tab="compare">Compare</button>
+    </nav>
+
+    <!-- Overview: the numbers that matter at a glance -->
+    <div id="tab-overview" class="panel stack" role="tabpanel" aria-labelledby="tabbtn-overview">
+      <div class="hero card">
+        <svg class="enso" viewBox="0 0 160 160" role="img" aria-label="Win rate">
+          <circle class="track" cx="80" cy="80" r="70"></circle>
+          <circle id="ring" class="arc" cx="80" cy="80" r="70" stroke-dasharray="0 440"></circle>
+          <text id="ring-pct" x="80" y="88" text-anchor="middle" font-size="30">0%</text>
+          <text x="80" y="108" text-anchor="middle" font-size="9" class="ring-label">win rate</text>
+        </svg>
+        <div class="stats">
+          <div class="stat"><b id="s-matches">0</b><span>Matches</span></div>
+          <div class="stat"><b id="s-record">0 – 0</b><span>Wins and losses</span></div>
+          <div class="stat"><b id="s-kd">0.00</b><span>K/D ratio</span></div>
+          <div class="stat"><b id="s-acs">0</b><span>Average combat score</span></div>
+        </div>
+      </div>
+
+      <div id="rank-panel" class="rank-panel" aria-label="Competitive rank">
+        <article class="rank-card card"><span class="rank-icon" id="rank-current-icon"></span><div><span class="label">Current rank</span><strong id="rank-current">Loading…</strong><small id="rank-current-season">Competitive</small></div></article>
+        <article class="rank-card card"><span class="rank-icon" id="rank-peak-icon"></span><div><span class="label">Peak rank</span><strong id="rank-peak">—</strong><small id="rank-peak-season">All-time peak reported by API</small></div></article>
+        <article class="rank-card card"><div><span class="label">Current RR</span><strong id="rank-rr">—</strong><small id="rank-rr-note">Ranked rating</small></div></article>
+      </div>
+
+      <div class="two">
+        <section class="card pad"><h2>Today</h2><div id="session-body"></div></section>
+        <section class="card pad"><h2>Highlights</h2><ul id="insight-list" class="insight-list"></ul></section>
+      </div>
+
+      <section>
+        <h2>Recent form</h2>
+        <div id="strip" class="strip" aria-label="Last 20 matches"></div>
+        <p class="hint">Last 20 matches, oldest on the left. Taller means a higher K/D.</p>
+      </section>
+    </div>
+
+    <!-- Matches: the log -->
+    <div id="tab-matches" class="panel stack" role="tabpanel" aria-labelledby="tabbtn-matches" hidden>
+      <section>
+        <div class="section-head">
+          <h2>Match log</h2>
+          <button id="log-toggle" class="quiet" type="button" hidden>Show all</button>
+        </div>
+        <p id="log-count" class="hint" aria-live="polite"></p>
+        <p class="hint">Select a match to see every player, K/D, ACS and who dominated who.</p>
+        <div class="table-wrap card">
+          <table>
+            <thead><tr><th>Date</th><th>Mode</th><th>Map</th><th>Agent</th><th>Result</th><th>Score</th><th>K / D / A</th><th>K/D</th><th>ACS</th><th aria-label="Details"></th></tr></thead>
+            <tbody id="log"></tbody>
+          </table>
+        </div>
+        <p id="log-empty" class="empty" hidden>No matches yet. Fetch your latest to load match history.</p>
+      </section>
+    </div>
+
+    <!-- Stats: how you do per agent and map -->
+    <div id="tab-stats" class="panel stack" role="tabpanel" aria-labelledby="tabbtn-stats" hidden>
+      <div class="two">
+        <section class="card pad"><h2>By agent</h2><div id="by-agent"></div></section>
+        <section class="card pad"><h2>By map</h2><div id="by-map"></div></section>
+      </div>
+      <section class="card pad">
+        <h2>Teammates</h2>
+        <div id="teammates"></div>
+        <p class="hint">Win rate with players you have queued with at least twice, in the selected game mode.</p>
+      </section>
+    </div>
+
+    <!-- Progress: trends over time and your rank goal -->
+    <div id="tab-progress" class="panel stack" role="tabpanel" aria-labelledby="tabbtn-progress" hidden>
+      <section>
+        <h2>Trends</h2>
+        <p id="charts-note" class="hint"></p>
+        <div id="charts" class="charts"></div>
+        <p class="hint">The thick line is a 5-match average; the thin line is each match.</p>
+      </section>
+      <section>
+        <h2>Rank history</h2>
+        <div id="rr-chart"></div>
+      </section>
+      <section class="card pad">
+        <h2>Rank goal</h2>
+        <label class="goal-form" for="goal-select">Target rank
+          <select id="goal-select"></select>
+        </label>
+        <div id="goal-result" class="stack"></div>
+      </section>
+    </div>
+
+    <!-- Compare: catch up with another player -->
+    <div id="tab-compare" class="panel stack" role="tabpanel" aria-labelledby="tabbtn-compare" hidden>
+      <section>
+        <h2>Compare ranks</h2>
+        <p class="hint">Roughly how many games it would take to catch up with another player.</p>
+        <div id="cmp-favorites"></div>
+        <p class="sub">Or enter a player</p>
+        <form id="cmp-form" class="id-form">
+          <label class="grow">Username <input id="cmp-name" placeholder="Username" autocomplete="off" spellcheck="false" required></label>
+          <label class="tag">Tag <input id="cmp-tag" placeholder="TAG" maxlength="5" autocomplete="off" spellcheck="false" required></label>
+          <button id="cmp-go" type="submit">Compare</button>
+        </form>
+        <p id="cmp-error" class="error" role="alert"></p>
+      </section>
+      <div id="cmp-result" class="stack" aria-live="polite"></div>
+    </div>
+
+  </div>
+
+  <p class="foot">Match data from the unofficial HenrikDev API. Not affiliated with Riot Games. <button id="storage-link" class="link" type="button">Where is my data saved?</button></p>
+</main>
+
+<dialog id="match-detail" class="sheet" aria-labelledby="md-title">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <div><h2 id="md-title"></h2><p id="md-sub" class="muted"></p></div>
+      <button id="md-close" class="quiet" type="button">Close</button>
+    </div>
+    <div id="md-body"></div>
+  </div>
+</dialog>
+
+<dialog id="storage-notice" aria-labelledby="storage-title">
+  <form method="dialog">
+    <h2 id="storage-title">Saved on this device</h2>
+    <p>Your favorites, tracked accounts and match history are saved in this browser, on this device only. They won't appear on other devices, and clearing your browser data will remove them. Use Export to keep a backup.</p>
+    <button type="submit">OK</button>
+  </form>
+</dialog>
+
+<script src="insights.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

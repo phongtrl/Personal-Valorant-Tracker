@@ -8,6 +8,16 @@ const KEY_API = "vt:apikey";
 const KEY_MATCHES = "vt:matches:";
 const KEY_FAVORITES = "vt:favorites";
 const KEY_TAB = "vt:tab";
+const KEY_THEME = "vt:theme";
+const KEY_BACKUP = "vt:backup";
+const KEY_SNOOZE = "vt:backup-snooze";
+const KEY_BLOCK = "vt:blocked-until";
+
+const MIN = 60e3;
+const DAY = 864e5;
+const FRESH_MS = 10 * MIN;    // automatic refreshes leave the API alone for this long
+const COOLDOWN_MS = MIN;      // the Fetch latest button waits this long between calls
+const KEEP_DETAILS = 150;     // if browser storage fills up, only the newest matches keep full player details
 const RING = 2 * Math.PI * 70;
 
 let account = null; // { name, tag, region }
@@ -48,11 +58,49 @@ const store = {
   remove(key) { try { localStorage.removeItem(key); } catch (e) { /* ignore */ } },
 };
 
+function ago(ms) {
+  const minutes = Math.round(ms / MIN);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+}
+
+// Runs loader() at most once per maxAge and keeps the result in the browser, so repeat visits don't call the API.
+async function cached(key, maxAge, loader) {
+  const slot = "vt:cache:" + key;
+  try {
+    const hit = JSON.parse(store.get(slot) || "null");
+    if (hit && Date.now() - hit.t < maxAge) return hit.v;
+  } catch (e) { /* ignore a damaged entry */ }
+  const v = await loader();
+  store.set(slot, JSON.stringify({ t: Date.now(), v }));
+  return v;
+}
+
+const fetchedKey = () => "vt:fetched:" + lower(account.name) + "#" + lower(account.tag);
+function fetchedTimes() {
+  try { return JSON.parse(store.get(fetchedKey()) || "{}") || {}; } catch (e) { return {}; }
+}
+const lastFetched = (kind) => Number(fetchedTimes()[kind]) || 0;
+const isFresh = (kind) => Date.now() - lastFetched(kind) < FRESH_MS;
+const markFetched = (kind) => store.set(fetchedKey(), JSON.stringify({ ...fetchedTimes(), [kind]: Date.now() }));
+
 const matchKey = () => KEY_MATCHES + lower(account.name) + "#" + lower(account.tag);
 
 function saveMatches() {
-  if (!store.set(matchKey(), JSON.stringify(matches))) {
-    setStatus("Couldn't save in this browser. Use Export JSON to keep your data.", true);
+  if (store.set(matchKey(), JSON.stringify(matches))) return;
+  // Storage is full: keep every match, but drop the heavy player details from the oldest ones.
+  const slim = sortMatches(matches).map((m, i) => {
+    if (i < KEEP_DETAILS || !m.details) return m;
+    const { details, ...rest } = m;
+    return rest;
+  });
+  if (store.set(matchKey(), JSON.stringify(slim))) {
+    matches = slim;
+    setStatus("Browser storage is nearly full, so older matches were saved without player details. Export a backup soon.", true);
+  } else {
+    setStatus("Couldn't save in this browser. Use Export to keep your data.", true);
   }
 }
 
@@ -67,7 +115,22 @@ function loadMatches() {
 
 /* ---------- Start up ---------- */
 
+function applyTheme() {
+  const pref = store.get(KEY_THEME) || "auto";
+  const dark = pref === "dark" || (pref === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.querySelector('meta[name="theme-color"]').content = dark ? "#171916" : "#F2EFE8";
+  document.querySelectorAll("[data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === pref)));
+}
+
+function registerServiceWorker() {
+  // Only works when served over http(s), not when opened straight from a file.
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
 function init() {
+  applyTheme();
+  registerServiceWorker();
   bindEvents();
   showTab(store.get(KEY_TAB) || "overview");
 
@@ -88,6 +151,8 @@ function openAccount(acc, autoFetch) {
   account = acc;
   store.set(KEY_ACCOUNT, JSON.stringify(account));
   matches = loadMatches();
+  rankNow = null;
+  loadRr();
   $("welcome").hidden = true;
   $("app").hidden = false;
   $("who").replaceChildren(document.createTextNode(account.name), el("small", "", "#" + account.tag));
@@ -95,7 +160,7 @@ function openAccount(acc, autoFetch) {
   updateFavoriteButton();
   renderFavorites();
   render();
-  if (autoFetch) syncMatches();
+  if (autoFetch) syncMatches(false);
 }
 
 function setStatus(message, isError = false) {
@@ -107,6 +172,12 @@ function setStatus(message, isError = false) {
 /* ---------- Lookup (HenrikDev API) ---------- */
 
 async function api(path) {
+  const wait = (Number(store.get(KEY_BLOCK)) || 0) - Date.now();
+  if (wait > 0) { // HenrikDev recently said "too many requests": don't ask again until the pause is over
+    const err = new Error(`HenrikDev asked us to slow down. Try again in ${Math.ceil(wait / 1000)} seconds.`);
+    err.status = 429;
+    throw err;
+  }
   let key = (store.get(KEY_API) || DEFAULT_API_KEY || "").trim();
   if (!key) {
     key = (window.prompt("Enter your HenrikDev API key. It will be stored only in this browser. For a public site, use a server-side proxy instead.") || "").trim();
@@ -130,6 +201,7 @@ async function api(path) {
   let json = null;
   try { json = await res.json(); } catch (_) {}
   if (!res.ok) {
+    if (res.status === 429) store.set(KEY_BLOCK, String(Date.now() + Math.min(Number(res.headers.get("retry-after")) || 60, 300) * 1000));
     const apiMessage = json?.errors?.map(x => x.message).filter(Boolean).join("; ") || json?.message || json?.error;
     const messages = {
       400: "The API rejected the request. Check the Riot ID and region/platform.",
@@ -154,11 +226,15 @@ async function api(path) {
 
 async function lookupRegion(name = account.name, tag = account.tag) {
   try {
-    const json = await api(`/valorant/v2/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
-    return (json.data && json.data.region) || "eu";
+    return await cached(`region:${lower(name)}#${lower(tag)}`, 30 * DAY, async () => {
+      const json = await api(`/valorant/v2/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
+      const region = json.data && json.data.region;
+      if (!region) throw new Error("No region in the response");
+      return region;
+    });
   } catch (e) {
     if ([401, 403, 404, 429].includes(e.status)) throw e;
-    return "eu";
+    return "eu"; // best guess when the lookup is unavailable; not saved
   }
 }
 
@@ -274,15 +350,19 @@ function parseMatch(m) {
 }
 
 
-async function fetchMmr(name, tag, region) {
-  const json = await api(`/valorant/v3/mmr/${encodeURIComponent(region)}/pc/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
-  return (json && json.data) || {};
+async function fetchMmr(name, tag, region, force = false) {
+  return cached(`mmr:${lower(name)}#${lower(tag)}`, force ? 0 : FRESH_MS, async () => {
+    const json = await api(`/valorant/v3/mmr/${encodeURIComponent(region)}/pc/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
+    const data = (json && json.data) || {};
+    return { current: data.current, peak: data.peak }; // only what the app uses, to keep the saved copy small
+  });
 }
 
-async function fetchRankStats() {
+async function fetchRankStats(force = false) {
   const currentNode = $("rank-current");
   const peakNode = $("rank-peak");
   const rrNode = $("rank-rr");
+  $("rank-panel").classList.add("rank-loading");
   currentNode.textContent = "Loading…";
   peakNode.textContent = "Loading…";
   rrNode.textContent = "—";
@@ -290,7 +370,7 @@ async function fetchRankStats() {
   $("rank-peak-season").textContent = "All-time peak reported by API";
   $("rank-rr-note").textContent = "Ranked rating";
   try {
-    const data = await fetchMmr(account.name, account.tag, account.region);
+    const data = await fetchMmr(account.name, account.tag, account.region, force);
     const current = data.current || {};
     const peak = data.peak || {};
     const currentTier = current.tier?.name || current.tier?.name_short || "Unranked / unavailable";
@@ -300,6 +380,8 @@ async function fetchRankStats() {
     $("rank-current-icon").replaceChildren(rankBadge(currentTier, 40));
     $("rank-peak-icon").replaceChildren(rankBadge(peakTier, 40));
     rrNode.textContent = Number.isFinite(Number(current.rr)) ? String(current.rr) : "—";
+    const idx = rankIndex(currentTier);
+    rankNow = idx === null ? null : { name: currentTier, rr: Number(current.rr) || 0, score: idx * 100 + (Number(current.rr) || 0) };
     if (peak.season?.short || peak.season?.id) {
       $("rank-peak-season").textContent = `Peak season: ${peak.season.short || peak.season.id}`;
     }
@@ -316,24 +398,39 @@ async function fetchRankStats() {
     $("rank-current-season").textContent = "Could not load competitive rank";
     $("rank-peak-season").textContent = "Check API key or account availability";
     $("rank-rr-note").textContent = "Could not load RR";
+    rankNow = null;
     console.warn("Could not fetch Valorant rank stats:", err);
+  } finally {
+    $("rank-panel").classList.remove("rank-loading");
+    renderGoal();
   }
 }
 
-async function syncMatches() {
+let syncing = false;
+
+async function syncMatches(manual = true) {
+  if (syncing) return;
+  const age = Date.now() - lastFetched("matches");
+  if (age < (manual ? COOLDOWN_MS : FRESH_MS)) {
+    setStatus(`Up to date. Last fetched ${ago(age)}, ${matches.length} matches saved.${manual ? " You can fetch again in a minute." : ""}`);
+    return;
+  }
+  syncing = true;
   const button = $("sync");
   button.disabled = true;
   button.classList.add("is-loading");
   button.innerHTML = '<span class="status-spinner" aria-hidden="true"></span> Fetching…';
   setStatus("Fetching recent matches from HenrikDev…");
+  $("app").classList.toggle("loading", !matches.length);
   try {
     if (!account.region) {
       account.region = await lookupRegion();
       store.set(KEY_ACCOUNT, JSON.stringify(account));
     }
     // Rank is fetched independently so an MMR endpoint issue doesn't block match history.
-    await fetchRankStats();
-    const path = `/valorant/v4/matches/${encodeURIComponent(account.region)}/pc/${encodeURIComponent(account.name)}/${encodeURIComponent(account.tag)}?size=20`;
+    await fetchRankStats(manual);
+    await fetchRrHistory(manual);
+    const path = `/valorant/v4/matches/${encodeURIComponent(account.region)}/pc/${encodeURIComponent(account.name)}/${encodeURIComponent(account.tag)}?size=${age < 6 * 60 * MIN ? 10 : 20}`;
     const json = await api(path);
     const rows = Array.isArray(json.data) ? json.data : [];
     if (!rows.length) {
@@ -352,12 +449,15 @@ async function syncMatches() {
       existing.set(String(m.id), m);
     });
     matches = sortMatches([...existing.values()]);
+    markFetched("matches");
     saveMatches();
     render();
     setStatus(`Fetched ${parsed.length} match(es); added ${added} new. ${matches.length} total saved.`);
   } catch (e) {
     setStatus(e.message || "Fetch failed. Check your API key and Riot ID.", true);
   } finally {
+    syncing = false;
+    $("app").classList.remove("loading");
     button.disabled = false;
     button.classList.remove("is-loading");
     button.innerHTML = '<span class="button-icon" aria-hidden="true">↻</span> Fetch latest';
@@ -436,7 +536,7 @@ function closeAccountMenu() {
 
 /* ---------- Tabs ---------- */
 
-const TABS = ["overview", "matches", "stats", "compare"];
+const TABS = ["overview", "matches", "stats", "progress", "compare"];
 
 let activeTab = null;
 
@@ -509,6 +609,12 @@ function bindTabs() {
 function bindEvents() {
   bindTabs();
   bindMatchDetail();
+  bindInsights();
+  document.querySelectorAll("[data-theme-choice]").forEach((b) => b.addEventListener("click", () => {
+    store.set(KEY_THEME, b.dataset.themeChoice);
+    applyTheme();
+  }));
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
   $("account-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const acc = parseRiotId($("riot-name").value, $("riot-tag").value);
@@ -548,18 +654,18 @@ function bindEvents() {
   });
 
   $("favorite-current").addEventListener("click", toggleCurrentFavorite);
-  $("sync").addEventListener("click", syncMatches);
-  $("mode-filter").addEventListener("change", () => { modeChosen = true; renderLog(); });
+  $("sync").addEventListener("click", () => syncMatches(true));
+  $("mode-filter").addEventListener("change", () => { modeChosen = true; render(); });
 
-  $("export").addEventListener("click", () => {
-    const data = { account: account.name + "#" + account.tag, matches };
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
-    link.href = url;
-    link.download = "valorant-matches.json";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setStatus(`Exported ${matches.length} matches.`);
+  $("export").addEventListener("click", exportData);
+  $("backup-now").addEventListener("click", exportData);
+  $("backup-later").addEventListener("click", () => {
+    store.set(KEY_SNOOZE, String(Date.now() + 7 * DAY));
+    renderBackupNote();
+  });
+  // Coming back to the app after a while refreshes it, but never more often than FRESH_MS.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && account && !$("app").hidden) syncMatches(false);
   });
 
   $("import").addEventListener("change", async (e) => {
@@ -574,6 +680,9 @@ function bindEvents() {
       incoming.forEach((m) => {
         if (isValidMatch(m) && !ids.has(m.id)) { matches.push(m); ids.add(m.id); added++; }
       });
+      if (Array.isArray(data.rr) && lower(data.account) === lower(account.name + "#" + account.tag)) {
+        mergeRr(data.rr.filter((h) => h && typeof h.id === "string" && Number.isFinite(h.time)));
+      }
       matches = sortMatches(matches);
       saveMatches();
       render();
@@ -590,6 +699,26 @@ function bindEvents() {
     if (wrap && !wrap.contains(e.target)) closeAccountMenu();
   });
  }
+
+function exportData() {
+  const data = { account: account.name + "#" + account.tag, exportedAt: new Date().toISOString(), matches, rr: rrHistory };
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  link.href = url;
+  link.download = `valorant-${lower(account.name)}-${today()}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  store.set(KEY_BACKUP, String(Date.now()));
+  renderBackupNote();
+  setStatus(`Exported ${matches.length} matches.`);
+}
+
+function renderBackupNote() {
+  const last = Number(store.get(KEY_BACKUP)) || 0;
+  $("backup-info").textContent = last ? `Last backup: ${ago(Date.now() - last)}` : "No backup yet.";
+  const due = matches.length >= 10 && Date.now() - last > 14 * DAY && Date.now() > (Number(store.get(KEY_SNOOZE)) || 0);
+  $("backup-note").hidden = !due;
+}
 
 function isValidMatch(m) {
   return m && typeof m.id === "string" && typeof m.map === "string" && typeof m.agent === "string" &&
@@ -608,9 +737,9 @@ function summarize(list) {
   return { n, wins, losses, winRate: n ? wins / n : 0, kd: deaths ? kills / deaths : kills, acs: n ? sum(list, "acs") / n : 0 };
 }
 
-function groupBy(key) {
+function groupBy(key, list) {
   const groups = {};
-  matches.forEach((m) => (groups[m[key]] = groups[m[key]] || []).push(m));
+  list.forEach((m) => (groups[m[key]] = groups[m[key]] || []).push(m));
   return Object.entries(groups)
     .map(([name, list]) => ({ name, ...summarize(list) }))
     .sort((a, b) => b.n - a.n || b.winRate - a.winRate);
@@ -629,7 +758,9 @@ const byDate = () => sortMatches(matches);
 /* ---------- Rendering ---------- */
 
 function render() {
-  const s = summarize(matches);
+  renderModeFilter();
+  const view = scope();
+  const s = summarize(view);
   $("s-matches").textContent = s.n;
   $("s-record").textContent = `${s.wins} – ${s.losses}`;
   $("s-kd").textContent = s.kd.toFixed(2);
@@ -638,17 +769,19 @@ function render() {
   $("ring").style.strokeDasharray = `${(RING * s.winRate).toFixed(1)} ${RING.toFixed(1)}`;
   $("ring").style.opacity = s.n ? 1 : 0;
 
-  renderStrip();
-  renderBreakdown("by-agent", "agent");
-  renderBreakdown("by-map", "map");
-  renderLog();
+  renderStrip(view);
+  renderBreakdown("by-agent", "agent", view);
+  renderBreakdown("by-map", "map", view);
+  renderLog(view);
+  renderInsights(view);
+  renderBackupNote();
   renderCmpFavorites();
 }
 
-function renderStrip() {
+function renderStrip(list) {
   const strip = $("strip");
   strip.replaceChildren();
-  byDate().slice(0, 20).reverse().forEach((m) => {
+  list.slice(0, 20).reverse().forEach((m) => {
     const kd = m.deaths ? m.kills / m.deaths : m.kills;
     const tick = el("div", "tick " + m.result);
     tick.style.height = Math.round(20 + Math.min(kd, 2.5) * 25) + "px";
@@ -657,46 +790,51 @@ function renderStrip() {
   });
 }
 
-function renderBreakdown(id, key) {
+function breakdownRow(name, sub, rate) {
+  const row = el("div", "brow");
+  const label = el("span", "", name);
+  label.append(el("small", "", sub));
+  const bar = el("div", "bar");
+  const fill = el("div", "fill");
+  fill.style.width = pct(rate);
+  bar.append(fill);
+  row.append(label, bar, el("span", "bpct", pct(rate)));
+  return row;
+}
+
+function renderBreakdown(id, key, list) {
   const box = $(id);
   box.replaceChildren();
-  const rows = groupBy(key);
+  const rows = groupBy(key, list);
   if (!rows.length) {
     box.append(el("p", "empty", "No matches yet."));
     return;
   }
-  rows.forEach((r) => {
-    const row = el("div", "brow");
-    const name = el("span", "", r.name);
-    name.append(el("small", "", `${r.n} ${r.n === 1 ? "game" : "games"} · K/D ${r.kd.toFixed(2)}`));
-    const bar = el("div", "bar");
-    const fill = el("div", "fill");
-    fill.style.width = pct(r.winRate);
-    bar.append(fill);
-    row.append(name, bar, el("span", "bpct", pct(r.winRate)));
-    box.append(row);
-  });
+  rows.forEach((r) => box.append(breakdownRow(r.name, `${r.n} ${r.n === 1 ? "game" : "games"} · K/D ${r.kd.toFixed(2)}`, r.winRate)));
 }
 
-function renderLog() {
-  const body = $("log");
-  body.replaceChildren();
-
+function renderModeFilter() {
   const filter = $("mode-filter");
   const modes = [...new Set(matches.map((m) => String(m.mode || "Unknown")))].sort((a, b) => a.localeCompare(b));
   const selectedMode = modeChosen ? (filter.value || "all") : (modes.includes("Competitive") ? "Competitive" : "all");
-  const options = [
-    { value: "all", label: "All game modes" },
-    ...modes.map((mode) => ({ value: mode, label: mode }))
-  ];
+  const options = [{ value: "all", label: "All game modes" }, ...modes.map((mode) => ({ value: mode, label: mode }))];
   filter.replaceChildren(...options.map(({ value, label }) => {
     const option = el("option", "", label);
     option.value = value;
     return option;
   }));
   filter.value = options.some((option) => option.value === selectedMode) ? selectedMode : "all";
+}
 
-  const visibleMatches = byDate().filter((m) => filter.value === "all" || String(m.mode || "Unknown") === filter.value);
+// Matches in the selected game mode, newest first. Every tab reads from this.
+function scope() {
+  const mode = $("mode-filter").value;
+  return byDate().filter((m) => mode === "all" || String(m.mode || "Unknown") === mode);
+}
+
+function renderLog(visibleMatches) {
+  const body = $("log");
+  body.replaceChildren();
   $("log-empty").hidden = visibleMatches.length > 0;
   $("log-empty").textContent = matches.length ? "No matches for this game mode." : "No matches yet. Fetch your latest to load match history.";
   const shown = showAllMatches ? visibleMatches : visibleMatches.slice(0, LOG_LIMIT);
@@ -733,6 +871,7 @@ function renderLog() {
 }
 
 let modeChosen = false;
+let rankNow = null; // { name, rr, score } for the tracked account, set by fetchRankStats
 
 /* ---------- Rank badges ---------- */
 
@@ -794,6 +933,33 @@ function gamesFor(gap, winRate) {
 function gamesText(gap, winRate) {
   const g = gamesFor(gap, winRate);
   return g === null ? "Not reachable" : g < 5 ? "Under 5 games" : `About ${g} games`;
+}
+
+// Rows of [win rate, label] used by the compare tab and the rank goal.
+function rateRows(withMine) {
+  const rows = [[0.55, "55% win rate"], [0.6, "60% win rate"], [0.65, "65% win rate"]];
+  const mine = recentCompetitiveWinRate();
+  if (withMine && mine !== null) rows.unshift([mine, `Your recent win rate (${pct(mine)})`]);
+  return rows;
+}
+
+function catchupEl(title, sub, size, rows) {
+  const games = rows.map(([rate]) => gamesFor(size, rate));
+  const max = Math.max(1, ...games.filter((g) => g !== null));
+  const card = el("div", "cmp-catchup card");
+  card.append(el("h3", "", title), el("p", "sub", sub));
+  rows.forEach(([rate, label], i) => {
+    const g = games[i];
+    const bar = el("div", "bar");
+    const fill = el("div", "fill");
+    fill.style.width = g === null ? "0%" : Math.max(4, (g / max) * 100) + "%";
+    bar.append(fill);
+    const row = el("div", "cmp-row");
+    row.append(el("span", "", label), bar, el("span", "est" + (g === null ? " no" : ""), gamesText(size, rate)));
+    card.append(row);
+  });
+  card.append(el("p", "cmp-note", `Assumes about ±${RR_PER_GAME} RR per game. Immortal and Radiant are approximated, and real gains vary with performance.`));
+  return card;
 }
 
 function ladderEl(me, them) {
@@ -868,29 +1034,12 @@ function renderCompare(me, them) {
   if (gap === 0) return;
 
   const youTrail = gap > 0;
-  const rows = [[0.55, "55% win rate"], [0.6, "60% win rate"], [0.65, "65% win rate"]];
-  const mine = recentCompetitiveWinRate();
-  if (youTrail && mine !== null) rows.unshift([mine, `Your recent win rate (${pct(mine)})`]);
-  const games = rows.map(([rate]) => gamesFor(size, rate));
-  const max = Math.max(1, ...games.filter((g) => g !== null));
-
-  const card = el("div", "cmp-catchup card");
-  card.append(
-    el("h3", "", youTrail ? "Your catch-up estimate" : "Their catch-up estimate"),
-    el("p", "sub", `Rough number of games ${youTrail ? "you need" : "they need"} to close the gap`)
-  );
-  rows.forEach(([rate, label], i) => {
-    const g = games[i];
-    const bar = el("div", "bar");
-    const fill = el("div", "fill");
-    fill.style.width = g === null ? "0%" : Math.max(4, (g / max) * 100) + "%";
-    bar.append(fill);
-    const row = el("div", "cmp-row");
-    row.append(el("span", "", label), bar, el("span", "est" + (g === null ? " no" : ""), gamesText(size, rate)));
-    card.append(row);
-  });
-  card.append(el("p", "cmp-note", `Assumes about ±${RR_PER_GAME} RR per game. Immortal and Radiant are approximated, and real gains vary with performance.`));
-  box.append(card);
+  box.append(catchupEl(
+    youTrail ? "Your catch-up estimate" : "Their catch-up estimate",
+    `Rough number of games ${youTrail ? "you need" : "they need"} to close the gap`,
+    size,
+    rateRows(youTrail)
+  ));
 }
 
 let cmpActive = "";
@@ -1095,7 +1244,7 @@ const LOG_LIMIT = 20;
 let showAllMatches = false;
 $("log-toggle").addEventListener("click", () => {
   showAllMatches = !showAllMatches;
-  renderLog();
+  render();
 });
 
 /* ---------- "Saved on this device" notice ---------- */

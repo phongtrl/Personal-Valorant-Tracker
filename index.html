@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valorant tracker</title>
+<meta name="theme-color" content="#F2EFE8">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<script>/* set the theme before first paint (script.js keeps it updated) */
+try { var p = localStorage.getItem("vt:theme") || "auto"; document.documentElement.dataset.theme = (p === "dark" || (p === "auto" && matchMedia("(prefers-color-scheme: dark)").matches)) ? "dark" : "light"; } catch (e) {}
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -45,7 +51,14 @@
               <button type="submit">Add and switch</button>
             </form>
             <p id="switch-error" class="error" role="alert"></p>
+            <p class="menu-heading">Appearance</p>
+            <div class="appearance">
+              <button class="chip" type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
+              <button class="chip" type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+              <button class="chip" type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+            </div>
             <p class="menu-heading">Data on this device</p>
+            <p id="backup-info" class="hint"></p>
             <div class="menu-row">
               <button id="export" class="quiet" type="button">Export</button>
               <label class="btn">Import<input id="import" type="file" accept="application/json" hidden></label>
@@ -56,14 +69,25 @@
     </header>
 
     <div class="profile">
-      <h1 id="who"></h1>
-      <p id="status" role="status" aria-live="polite"></p>
+      <div>
+        <h1 id="who"></h1>
+        <p id="status" role="status" aria-live="polite"></p>
+      </div>
+      <label for="mode-filter">Game mode
+        <select id="mode-filter" aria-label="Game mode for all tabs"><option value="all">All game modes</option></select>
+      </label>
+    </div>
+
+    <div id="backup-note" class="note backup" hidden>
+      <span>It has been a while since your last backup. Your history is saved only in this browser.</span>
+      <span class="backup-actions"><button id="backup-now" type="button" class="small">Export now</button><button id="backup-later" type="button" class="quiet small">Later</button></span>
     </div>
 
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button id="tabbtn-overview" class="tab" role="tab" type="button" aria-controls="tab-overview" aria-selected="true" data-tab="overview">Overview</button>
       <button id="tabbtn-matches" class="tab" role="tab" type="button" aria-controls="tab-matches" aria-selected="false" tabindex="-1" data-tab="matches">Matches</button>
       <button id="tabbtn-stats" class="tab" role="tab" type="button" aria-controls="tab-stats" aria-selected="false" tabindex="-1" data-tab="stats">Stats</button>
+      <button id="tabbtn-progress" class="tab" role="tab" type="button" aria-controls="tab-progress" aria-selected="false" tabindex="-1" data-tab="progress">Progress</button>
       <button id="tabbtn-compare" class="tab" role="tab" type="button" aria-controls="tab-compare" aria-selected="false" tabindex="-1" data-tab="compare">Compare</button>
     </nav>
 
@@ -84,10 +108,15 @@
         </div>
       </div>
 
-      <div class="rank-panel" aria-label="Competitive rank">
+      <div id="rank-panel" class="rank-panel" aria-label="Competitive rank">
         <article class="rank-card card"><span class="rank-icon" id="rank-current-icon"></span><div><span class="label">Current rank</span><strong id="rank-current">Loading…</strong><small id="rank-current-season">Competitive</small></div></article>
         <article class="rank-card card"><span class="rank-icon" id="rank-peak-icon"></span><div><span class="label">Peak rank</span><strong id="rank-peak">—</strong><small id="rank-peak-season">All-time peak reported by API</small></div></article>
         <article class="rank-card card"><div><span class="label">Current RR</span><strong id="rank-rr">—</strong><small id="rank-rr-note">Ranked rating</small></div></article>
+      </div>
+
+      <div class="two">
+        <section class="card pad"><h2>Today</h2><div id="session-body"></div></section>
+        <section class="card pad"><h2>Highlights</h2><ul id="insight-list" class="insight-list"></ul></section>
       </div>
 
       <section>
@@ -102,12 +131,7 @@
       <section>
         <div class="section-head">
           <h2>Match log</h2>
-          <div class="controls">
-            <label for="mode-filter">Game mode
-              <select id="mode-filter" aria-label="Filter match log by game mode"><option value="all">All game modes</option></select>
-            </label>
-            <button id="log-toggle" class="quiet" type="button" hidden>Show all</button>
-          </div>
+          <button id="log-toggle" class="quiet" type="button" hidden>Show all</button>
         </div>
         <p id="log-count" class="hint" aria-live="polite"></p>
         <p class="hint">Select a match to see every player, K/D, ACS and who dominated who.</p>
@@ -127,6 +151,32 @@
         <section class="card pad"><h2>By agent</h2><div id="by-agent"></div></section>
         <section class="card pad"><h2>By map</h2><div id="by-map"></div></section>
       </div>
+      <section class="card pad">
+        <h2>Teammates</h2>
+        <div id="teammates"></div>
+        <p class="hint">Win rate with players you have queued with at least twice, in the selected game mode.</p>
+      </section>
+    </div>
+
+    <!-- Progress: trends over time and your rank goal -->
+    <div id="tab-progress" class="panel stack" role="tabpanel" aria-labelledby="tabbtn-progress" hidden>
+      <section>
+        <h2>Trends</h2>
+        <p id="charts-note" class="hint"></p>
+        <div id="charts" class="charts"></div>
+        <p class="hint">The thick line is a 5-match average; the thin line is each match.</p>
+      </section>
+      <section>
+        <h2>Rank history</h2>
+        <div id="rr-chart"></div>
+      </section>
+      <section class="card pad">
+        <h2>Rank goal</h2>
+        <label class="goal-form" for="goal-select">Target rank
+          <select id="goal-select"></select>
+        </label>
+        <div id="goal-result" class="stack"></div>
+      </section>
     </div>
 
     <!-- Compare: catch up with another player -->
@@ -169,6 +219,7 @@
   </form>
 </dialog>
 
+<script src="insights.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
