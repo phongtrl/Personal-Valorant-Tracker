@@ -93,23 +93,76 @@ function renderHighlights(view) {
 
 /* ---------- Charts ---------- */
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs = {}, parent) {
+  const node = document.createElementNS(SVG_NS, tag);
+  Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, v));
+  if (parent) parent.append(node);
+  return node;
+}
+
 const movingAverage = (values, size) => values.map((_, i) => average(values.slice(Math.max(0, i - size + 1), i + 1)));
 
-function chartSvg(values, label, { ref, min, max } = {}) {
-  const W = 320, H = 120, L = 6, R = 6, T = 10, B = 10;
+// A smooth curve through the points that never overshoots them (monotone cubic interpolation).
+function smoothPath(pts) {
+  const n = pts.length;
+  const f = (v) => v.toFixed(1);
+  if (n < 2) return "";
+  const dx = [], m = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = pts[i + 1][0] - pts[i][0];
+    m[i] = (pts[i + 1][1] - pts[i][1]) / dx[i];
+  }
+  const t = [m[0]];
+  for (let i = 1; i < n - 1; i++) t[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+  t[n - 1] = m[n - 2];
+  for (let i = 0; i < n - 1; i++) {
+    if (m[i] === 0) { t[i] = t[i + 1] = 0; continue; }
+    const a = t[i] / m[i], b = t[i + 1] / m[i], s = a * a + b * b;
+    if (s > 9) { const k = 3 / Math.sqrt(s); t[i] = k * a * m[i]; t[i + 1] = k * b * m[i]; }
+  }
+  let d = `M${f(pts[0][0])},${f(pts[0][1])}`;
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    d += ` C${f(pts[i][0] + h)},${f(pts[i][1] + t[i] * h)} ${f(pts[i + 1][0] - h)},${f(pts[i + 1][1] - t[i + 1] * h)} ${f(pts[i + 1][0])},${f(pts[i + 1][1])}`;
+  }
+  return d;
+}
+
+// One smooth trend line (5-match average) with a node for every match, grid lines and labelled axis.
+function chartSvg(values, label, { ref, min, max, fmt, meta = [], onHover }) {
+  const W = 340, H = 150, L = 38, R = 12, T = 14, B = 12;
+  const last = values.length - 1;
   const lo = min ?? Math.min(...values);
   const hi = max ?? Math.max(...values);
-  const pad = (hi - lo) * 0.1 || 1;
+  const pad = (hi - lo) * 0.12 || 1;
   const y0 = lo - pad, y1 = hi + pad;
-  const x = (i) => L + (i * (W - L - R)) / (values.length - 1);
+  const x = (i) => L + (i * (W - L - R)) / last;
   const y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const line = (list) => list.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  const last = values.length - 1;
-  const refLine = ref !== undefined && ref > y0 && ref < y1 ? `<line class="chart-ref" x1="${L}" x2="${W - R}" y1="${y(ref).toFixed(1)}" y2="${y(ref).toFixed(1)}"/>` : "";
-  const wrap = el("div");
-  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${refLine}<polyline class="chart-raw" points="${line(values)}"/><polyline class="chart-avg" points="${line(movingAverage(values, 5))}"/><circle class="chart-dot" cx="${x(last).toFixed(1)}" cy="${y(values[last]).toFixed(1)}" r="3.5"/></svg>`;
-  wrap.firstChild.setAttribute("aria-label", label);
-  return wrap;
+  const n = (v) => v.toFixed(1);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": label });
+
+  (hi > lo ? [lo, (lo + hi) / 2, hi] : [lo]).forEach((v) => {
+    svgEl("line", { class: "chart-grid", x1: L, x2: W - R, y1: n(y(v)), y2: n(y(v)) }, svg);
+    svgEl("text", { class: "chart-axis", x: L - 6, y: n(y(v) + 3), "text-anchor": "end" }, svg).textContent = fmt(v);
+  });
+  if (ref !== undefined && ref > y0 && ref < y1) svgEl("line", { class: "chart-ref", x1: L, x2: W - R, y1: n(y(ref)), y2: n(y(ref)) }, svg);
+
+  const curve = smoothPath(movingAverage(values, 5).map((v, i) => [x(i), y(v)]));
+  svgEl("path", { class: "chart-area", d: `${curve} L${n(x(last))},${H - B} L${n(x(0))},${H - B} Z` }, svg);
+  svgEl("path", { class: "chart-trend", d: curve }, svg);
+
+  values.forEach((v, i) => {
+    const point = svgEl("g", { class: "chart-point" }, svg);
+    svgEl("circle", { class: "chart-hit", cx: n(x(i)), cy: n(y(v)), r: 9 }, point);
+    svgEl("circle", { class: `chart-node ${(meta[i] && meta[i].tone) || ""}${i === last ? " last" : ""}`, cx: n(x(i)), cy: n(y(v)), r: i === last ? 4.5 : 3.2 }, point);
+    svgEl("title", {}, point).textContent = `${fmt(v)}${meta[i] ? " · " + meta[i].label : ""}`;
+    point.addEventListener("pointerenter", () => onHover(i));
+    point.addEventListener("pointerleave", () => onHover(null));
+    point.addEventListener("click", () => onHover(i)); // tap on a phone
+  });
+  return svg;
 }
 
 function chartCard(title, values, fmt, opts = {}) {
@@ -121,13 +174,19 @@ function chartCard(title, values, fmt, opts = {}) {
     card.append(el("p", "empty", "Not enough matches yet."));
     return card;
   }
+  const meta = opts.meta || [];
+  const last = values.length - 1;
+  const detail = (i) => `${fmt(values[i])}${meta[i] ? " · " + meta[i].label : ""}`;
+  const resting = `Latest: ${detail(last)}`;
+  const readout = el("p", "chart-readout", resting);
   const foot = opts.foot ?? `Average ${fmt(average(values))} over ${values.length} matches`;
-  card.append(chartSvg(values, `${title}: ${foot}`, opts), el("p", "chart-foot", foot));
+  card.append(readout, chartSvg(values, `${title}: ${foot}`, { ...opts, fmt, onHover: (i) => { readout.textContent = i === null ? resting : detail(i); } }), el("p", "chart-foot", foot));
   return card;
 }
 
 function renderCharts(view) {
   const recent = view.slice(0, CHART_MATCHES).reverse(); // oldest first
+  const meta = recent.map((m) => ({ tone: m.result, label: `${m.date} · ${m.map}${m.agent ? " · " + m.agent : ""}` }));
   const rolling = recent.map((_, i) => {
     const window = recent.slice(Math.max(0, i - 9), i + 1);
     return (window.filter((m) => m.result === "win").length / window.length) * 100;
@@ -135,9 +194,9 @@ function renderCharts(view) {
   const mode = $("mode-filter").selectedOptions[0];
   $("charts-note").textContent = `Last ${recent.length} matches · ${mode ? mode.textContent : "all game modes"}`;
   $("charts").replaceChildren(
-    chartCard("Combat score", recent.map((m) => m.acs), (v) => String(Math.round(v))),
-    chartCard("K/D per match", recent.map(kdOf), (v) => v.toFixed(2), { ref: 1 }),
-    chartCard("Win rate, rolling 10", rolling, (v) => Math.round(v) + "%", { ref: 50, min: 0, max: 100 })
+    chartCard("Combat score", recent.map((m) => m.acs), (v) => String(Math.round(v)), { meta }),
+    chartCard("K/D per match", recent.map(kdOf), (v) => v.toFixed(2), { ref: 1, meta }),
+    chartCard("Win rate, rolling 10", rolling, (v) => Math.round(v) + "%", { ref: 50, min: 0, max: 100, meta })
   );
 }
 
@@ -151,9 +210,11 @@ function renderRrChart() {
   }
   const last = data[data.length - 1];
   const net = last.score - data[0].score;
-  box.append(chartCard("Rank rating", data.map((h) => h.score), String, {
+  const meta = data.map((h) => ({ tone: h.change > 0 ? "win" : h.change < 0 ? "loss" : "", label: `${localDay(h.time)} · ${h.change > 0 ? "+" : ""}${h.change} RR` }));
+  box.append(chartCard("Rank rating", data.map((h) => h.score), (v) => String(Math.round(v)), {
     head: `${last.tier} · ${last.rr} RR`,
     foot: `${net > 0 ? "+" : ""}${net} RR across your last ${data.length} ranked games`,
+    meta,
   }));
 }
 

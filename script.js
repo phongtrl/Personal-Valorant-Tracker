@@ -419,7 +419,7 @@ async function syncMatches(manual = true) {
   const button = $("sync");
   button.disabled = true;
   button.classList.add("is-loading");
-  button.innerHTML = '<span class="status-spinner" aria-hidden="true"></span> Fetching…';
+  button.querySelector(".tool-label").textContent = "Fetching…";
   setStatus("Fetching recent matches from HenrikDev…");
   $("app").classList.toggle("loading", !matches.length);
   try {
@@ -460,7 +460,7 @@ async function syncMatches(manual = true) {
     $("app").classList.remove("loading");
     button.disabled = false;
     button.classList.remove("is-loading");
-    button.innerHTML = '<span class="button-icon" aria-hidden="true">↻</span> Fetch latest';
+    button.querySelector(".tool-label").textContent = "Fetch latest";
   }
 }
 
@@ -480,7 +480,8 @@ function updateFavoriteButton() {
   if (!button || !account) return;
   const active = isFavorite();
   button.setAttribute("aria-pressed", String(active));
-  button.innerHTML = `${active ? "★" : "☆"} <span>${active ? "Favorited" : "Add favorite"}</span>`;
+  button.setAttribute("aria-label", active ? "Remove from favorites" : "Add to favorites");
+  button.querySelector(".tool-label").textContent = active ? "Favorited" : "Favorite";
 }
 function toggleCurrentFavorite() {
   if (!account) return;
@@ -559,6 +560,24 @@ function showTab(name, focus = false) {
   store.set(KEY_TAB, name);
 }
 
+// The phone menu (three bars). On wide screens the same markup is simply the top bar.
+function setNav(open) {
+  $("navbar").classList.toggle("open", open);
+  const toggle = $("nav-toggle");
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+}
+
+function bindNavbar() {
+  $("nav-toggle").addEventListener("click", () => setNav(!$("navbar").classList.contains("open")));
+  $("navbar").addEventListener("click", (e) => {
+    if (e.target.closest("[data-tab], #sync, #favorite-current")) setNav(false); // picking something closes the menu
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".topbar")) setNav(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setNav(false); });
+  matchMedia("(min-width: 1081px)").addEventListener("change", (e) => { if (e.matches) setNav(false); });
+}
+
 function bindTabs() {
   const bar = document.querySelector(".tabs");
   bar.addEventListener("click", (e) => {
@@ -615,6 +634,7 @@ function bindEvents() {
     applyTheme();
   }));
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+  bindNavbar();
   $("account-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const acc = parseRiotId($("riot-name").value, $("riot-tag").value);
